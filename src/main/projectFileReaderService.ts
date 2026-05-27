@@ -1,0 +1,100 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import type { ProjectContextFile, ReadProjectFilesResponse } from '../shared/types';
+
+const MAX_FILES = 10;
+const MAX_FILE_BYTES = 80 * 1024;
+const MAX_TOTAL_BYTES = 300 * 1024;
+const TEXT_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.json', '.css', '.scss', '.html', '.md', '.yml', '.yaml']);
+
+function validateRelativePath(relativePath: string): string {
+  if (!relativePath.trim()) {
+    throw new Error('A selected file path is empty.');
+  }
+  if (path.isAbsolute(relativePath)) {
+    throw new Error(`Absolute paths are not allowed: ${relativePath}`);
+  }
+
+  const normalized = path.normalize(relativePath);
+  if (normalized === '..' || normalized.startsWith(`..${path.sep}`)) {
+    throw new Error(`File is outside the selected project folder: ${relativePath}`);
+  }
+
+  return normalized;
+}
+
+function resolveInsideProject(folderPath: string, relativePath: string): { absolutePath: string; normalizedRelativePath: string } {
+  const projectRoot = path.resolve(folderPath);
+  const normalizedRelativePath = validateRelativePath(relativePath);
+  const absolutePath = path.resolve(projectRoot, normalizedRelativePath);
+  const relativeFromRoot = path.relative(projectRoot, absolutePath);
+
+  if (relativeFromRoot === '..' || relativeFromRoot.startsWith(`..${path.sep}`) || path.isAbsolute(relativeFromRoot)) {
+    throw new Error(`File is outside the selected project folder: ${relativePath}`);
+  }
+
+  return { absolutePath, normalizedRelativePath };
+}
+
+async function readFileSnippet(absolutePath: string, maxBytes: number): Promise<Buffer> {
+  const handle = await fs.open(absolutePath, 'r');
+  try {
+    const buffer = Buffer.alloc(maxBytes);
+    const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
+export async function readProjectFiles(folderPath: string, relativePaths: string[]): Promise<ReadProjectFilesResponse> {
+  if (!folderPath.trim()) {
+    throw new Error('Open a project folder before loading context files.');
+  }
+  if (relativePaths.length === 0) {
+    return { files: [] };
+  }
+  if (relativePaths.length > MAX_FILES) {
+    throw new Error(`Select at most ${MAX_FILES} context files.`);
+  }
+
+  let totalBytes = 0;
+  const files: ProjectContextFile[] = [];
+
+  for (const relativePath of relativePaths) {
+    const { absolutePath, normalizedRelativePath } = resolveInsideProject(folderPath, relativePath);
+    const extension = path.extname(normalizedRelativePath).toLowerCase();
+    if (!TEXT_EXTENSIONS.has(extension)) {
+      throw new Error(`Unsupported context file type: ${relativePath}`);
+    }
+
+    let stat;
+    try {
+      stat = await fs.stat(absolutePath);
+    } catch {
+      throw new Error(`Context file does not exist: ${relativePath}`);
+    }
+    if (!stat.isFile()) {
+      throw new Error(`Context path is not a file: ${relativePath}`);
+    }
+
+    const remainingBytes = MAX_TOTAL_BYTES - totalBytes;
+    if (remainingBytes <= 0) {
+      break;
+    }
+
+    const readLimit = Math.min(MAX_FILE_BYTES, remainingBytes);
+    const contentBuffer = await readFileSnippet(absolutePath, readLimit);
+    const truncated = stat.size > contentBuffer.byteLength;
+    totalBytes += contentBuffer.byteLength;
+
+    files.push({
+      relativePath: normalizedRelativePath.split(path.sep).join('/'),
+      content: contentBuffer.toString('utf8'),
+      size: stat.size,
+      truncated,
+    });
+  }
+
+  return { files };
+}

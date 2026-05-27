@@ -123,6 +123,125 @@ export interface RollbackPatchResponse {
   restoredFiles: PatchRollbackFileResult[];
 }
 
+export type CommandStatus = 'idle' | 'running' | 'success' | 'failed' | 'stopped' | 'blocked';
+
+export interface RunCommandRequest {
+  folderPath: string;
+  command: string;
+}
+
+export interface RunCommandResponse {
+  startedAt: string;
+}
+
+export interface CommandOutputEvent {
+  type: 'stdout' | 'stderr';
+  data: string;
+  timestamp: string;
+}
+
+export interface CommandErrorEvent {
+  message: string;
+}
+
+export interface CommandExitEvent {
+  exitCode: number | null;
+  signal?: string;
+  durationMs: number;
+}
+
+export type ErrorAnalysisConfidence = 'low' | 'medium' | 'high';
+
+export interface AnalyzeCommandErrorRequest {
+  command: string;
+  exitCode: number | null;
+  output: string;
+  projectContext: ProjectContext;
+  loadedContextFiles?: ProjectContextFile[];
+  rawRequest?: string;
+  detectedIntent?: DetectedIntent;
+  selectedVariant?: PromptVariant;
+}
+
+export interface ErrorAnalysisResult {
+  summary: string;
+  probableCauses: string[];
+  relatedFiles: string[];
+  suggestedNextActions: string[];
+  suggestedPrompt: string;
+  confidence: ErrorAnalysisConfidence;
+}
+
+export interface ProjectMemoryInfo {
+  projectId: string;
+  projectPath: string;
+  projectName: string;
+  lastOpenedAt: string;
+  createdAt: string;
+  fileCount: number;
+  extensionsSummary: Record<string, number>;
+}
+
+export interface VerifyCommandSummary {
+  command: string;
+  exitCode: number | null;
+  status: CommandStatus;
+  outputPreview: string;
+  truncated: boolean;
+}
+
+export interface PatchPlanSummary {
+  summary: string;
+  riskLevel: PatchRiskLevel;
+  changedFiles: string[];
+}
+
+export interface SessionItem {
+  id: string;
+  projectId: string;
+  createdAt: string;
+  updatedAt: string;
+  title: string;
+  rawRequest: string;
+  detectedIntent?: DetectedIntent | null;
+  promptVariants?: PromptVariant[];
+  selectedVariant?: PromptVariant | null;
+  finalPrompt?: string;
+  loadedContextFilePaths?: string[];
+  executionMode?: ExecutionMode;
+  executionResult?: string;
+  patchPlanSummary?: PatchPlanSummary;
+  applyResult?: ApplyPatchResponse | null;
+  verifyCommand?: VerifyCommandSummary | null;
+  errorAnalysis?: ErrorAnalysisResult | null;
+}
+
+export interface SaveProjectMemoryRequest {
+  projectPath: string;
+  fileCount: number;
+  extensionsSummary: Record<string, number>;
+}
+
+export interface CreateSessionRequest {
+  projectId: string;
+  initialData: Partial<SessionItem>;
+}
+
+export interface UpdateSessionRequest {
+  projectId: string;
+  sessionId: string;
+  partialData: Partial<SessionItem>;
+}
+
+export interface SessionRequest {
+  projectId: string;
+  sessionId: string;
+}
+
+export interface ProjectSessionsRequest {
+  projectId: string;
+}
+
 export interface ExecutePromptRequest {
   rawRequest: string;
   finalPrompt: string;
@@ -147,14 +266,45 @@ export interface AiSettings {
   model: string;
 }
 
+export interface AiNetworkEvent {
+  id: string;
+  startedAt: string;
+  finishedAt?: string;
+  method: 'POST';
+  url: string;
+  model: string;
+  status?: number;
+  ok?: boolean;
+  durationMs?: number;
+  requestBytes: number;
+  responseBytes?: number;
+  error?: string;
+}
+
 export interface ElectronApi {
   openProjectFolder: () => Promise<FolderPickerResult>;
   getSettings: () => Promise<AiSettings>;
   saveSettings: (settings: AiSettings) => Promise<AiSettings>;
   testConnection: (settings: AiSettings) => Promise<{ ok: boolean; error?: string }>;
+  getAiNetworkEvents: () => Promise<AiNetworkEvent[]>;
+  clearAiNetworkEvents: () => Promise<void>;
+  onAiNetworkEvent: (callback: (event: AiNetworkEvent) => void) => () => void;
   optimizePrompt: (request: OptimizePromptRequest) => Promise<OptimizePromptResponse>;
   executePrompt: (request: ExecutePromptRequest) => Promise<ExecutePromptResponse>;
   readProjectFiles: (request: ReadProjectFilesRequest) => Promise<ReadProjectFilesResponse>;
   applyPatch: (request: ApplyPatchRequest) => Promise<ApplyPatchResponse>;
   rollbackPatch: (request: RollbackPatchRequest) => Promise<RollbackPatchResponse>;
+  runProjectCommand: (request: RunCommandRequest) => Promise<RunCommandResponse>;
+  stopProjectCommand: () => Promise<void>;
+  onCommandOutput: (callback: (event: CommandOutputEvent) => void) => () => void;
+  onCommandError: (callback: (event: CommandErrorEvent) => void) => () => void;
+  onCommandExit: (callback: (event: CommandExitEvent) => void) => () => void;
+  analyzeCommandError: (request: AnalyzeCommandErrorRequest) => Promise<ErrorAnalysisResult>;
+  saveProjectMemory: (request: SaveProjectMemoryRequest) => Promise<ProjectMemoryInfo>;
+  createSession: (request: CreateSessionRequest) => Promise<SessionItem>;
+  updateSession: (request: UpdateSessionRequest) => Promise<SessionItem>;
+  listSessions: (request: ProjectSessionsRequest) => Promise<SessionItem[]>;
+  getSession: (request: SessionRequest) => Promise<SessionItem>;
+  deleteSession: (request: SessionRequest) => Promise<void>;
+  clearProjectSessions: (request: ProjectSessionsRequest) => Promise<void>;
 }

@@ -87,6 +87,7 @@ export function ContextFilesPanel({ selectedFolder, scannedFiles, rawRequest }: 
 
   const supportedFiles = useMemo(() => scannedFiles.filter((file) => CONTEXT_EXTENSIONS.has(file.extension.toLowerCase())), [scannedFiles]);
   const suggested = useMemo(() => suggestFiles(scannedFiles, rawRequest), [scannedFiles, rawRequest]);
+  const suggestedSet = useMemo(() => new Set(suggestedFilePaths), [suggestedFilePaths]);
 
   useEffect(() => {
     setSuggestedFilePaths(suggested);
@@ -94,11 +95,11 @@ export function ContextFilesPanel({ selectedFolder, scannedFiles, rawRequest }: 
 
   const filteredFiles = useMemo(() => {
     const query = search.trim().toLowerCase();
-    if (!query) return supportedFiles.slice(0, 80);
-    return supportedFiles.filter((file) => file.relativePath.toLowerCase().includes(query)).slice(0, 80);
-  }, [search, supportedFiles]);
+    const files = supportedFiles.filter((file) => !suggestedSet.has(file.relativePath));
+    if (!query) return files.slice(0, 80);
+    return files.filter((file) => file.relativePath.toLowerCase().includes(query)).slice(0, 80);
+  }, [search, suggestedSet, supportedFiles]);
 
-  const suggestedSet = new Set(suggestedFilePaths);
   const disabledByLimit = selectedContextFilePaths.length >= 10;
 
   const loadSelected = async (): Promise<void> => {
@@ -183,7 +184,7 @@ export function ContextFilesPanel({ selectedFolder, scannedFiles, rawRequest }: 
               <div key={file.relativePath} className="rounded-2xl border border-white/10 bg-ink/50 px-3 py-2 text-sm text-slate-300">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="truncate font-semibold text-slate-100">{file.relativePath}</span>
-                  <span className="text-xs text-slate-500">{Math.ceil(file.content.length / 1024)}KB loaded{file.truncated ? ' · truncated' : ''}</span>
+                  <span className="text-xs text-slate-500">{Math.ceil(file.content.length / 1024)}KB loaded{file.truncated ? ' - truncated' : ''}</span>
                 </div>
               </div>
             ))}

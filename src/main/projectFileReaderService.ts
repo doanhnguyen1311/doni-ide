@@ -23,17 +23,31 @@ function validateRelativePath(relativePath: string): string {
   return normalized;
 }
 
-function resolveInsideProject(folderPath: string, relativePath: string): { absolutePath: string; normalizedRelativePath: string } {
-  const projectRoot = path.resolve(folderPath);
+function isInsideProject(projectRoot: string, absolutePath: string): boolean {
+  const relativeFromRoot = path.relative(projectRoot, absolutePath);
+  return relativeFromRoot === '' || (!relativeFromRoot.startsWith(`..${path.sep}`) && relativeFromRoot !== '..' && !path.isAbsolute(relativeFromRoot));
+}
+
+function resolveInsideProject(projectRoot: string, relativePath: string): { absolutePath: string; normalizedRelativePath: string } {
   const normalizedRelativePath = validateRelativePath(relativePath);
   const absolutePath = path.resolve(projectRoot, normalizedRelativePath);
-  const relativeFromRoot = path.relative(projectRoot, absolutePath);
 
-  if (relativeFromRoot === '..' || relativeFromRoot.startsWith(`..${path.sep}`) || path.isAbsolute(relativeFromRoot)) {
+  if (!isInsideProject(projectRoot, absolutePath)) {
     throw new Error(`File is outside the selected project folder: ${relativePath}`);
   }
 
   return { absolutePath, normalizedRelativePath };
+}
+
+function fileAccessError(error: unknown, relativePath: string, fallback: string): Error {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (code === 'ENOENT' || code === 'ENOTDIR') {
+    return new Error(`Context file does not exist: ${relativePath}`);
+  }
+  if (code === 'EACCES' || code === 'EPERM') {
+    return new Error(`Permission denied while reading context file: ${relativePath}`);
+  }
+  return new Error(fallback);
 }
 
 async function readFileSnippet(absolutePath: string, maxBytes: number): Promise<Buffer> {
@@ -60,9 +74,11 @@ export async function readProjectFiles(folderPath: string, relativePaths: string
 
   let totalBytes = 0;
   const files: ProjectContextFile[] = [];
+  const projectRoot = path.resolve(folderPath);
+  const projectRootRealPath = await fs.realpath(projectRoot);
 
   for (const relativePath of relativePaths) {
-    const { absolutePath, normalizedRelativePath } = resolveInsideProject(folderPath, relativePath);
+    const { absolutePath, normalizedRelativePath } = resolveInsideProject(projectRoot, relativePath);
     const extension = path.extname(normalizedRelativePath).toLowerCase();
     if (!TEXT_EXTENSIONS.has(extension)) {
       throw new Error(`Unsupported context file type: ${relativePath}`);
@@ -71,11 +87,21 @@ export async function readProjectFiles(folderPath: string, relativePaths: string
     let stat;
     try {
       stat = await fs.stat(absolutePath);
-    } catch {
-      throw new Error(`Context file does not exist: ${relativePath}`);
+    } catch (error) {
+      throw fileAccessError(error, relativePath, `Unable to inspect context file: ${relativePath}`);
     }
     if (!stat.isFile()) {
       throw new Error(`Context path is not a file: ${relativePath}`);
+    }
+
+    let realFilePath;
+    try {
+      realFilePath = await fs.realpath(absolutePath);
+    } catch (error) {
+      throw fileAccessError(error, relativePath, `Unable to resolve context file: ${relativePath}`);
+    }
+    if (!isInsideProject(projectRootRealPath, realFilePath)) {
+      throw new Error(`File is outside the selected project folder: ${relativePath}`);
     }
 
     const remainingBytes = MAX_TOTAL_BYTES - totalBytes;
@@ -84,7 +110,12 @@ export async function readProjectFiles(folderPath: string, relativePaths: string
     }
 
     const readLimit = Math.min(MAX_FILE_BYTES, remainingBytes);
-    const contentBuffer = await readFileSnippet(absolutePath, readLimit);
+    let contentBuffer;
+    try {
+      contentBuffer = await readFileSnippet(realFilePath, readLimit);
+    } catch (error) {
+      throw fileAccessError(error, relativePath, `Unable to read context file: ${relativePath}`);
+    }
     const truncated = stat.size > contentBuffer.byteLength;
     totalBytes += contentBuffer.byteLength;
 

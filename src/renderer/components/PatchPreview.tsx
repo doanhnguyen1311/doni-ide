@@ -89,7 +89,9 @@ export function PatchPreview({
       ) : null}
 
       <div className="mt-5 rounded-2xl border border-white/10 bg-ink/40 p-4 text-sm text-slate-400">
-        No files are changed until you click Apply Changes. A backup is created before applying. Rollback is available after apply.
+        <div>No files are changed until you click Apply Changes.</div>
+        <div>A backup is created before applying.</div>
+        <div>Rollback is available after apply.</div>
       </div>
 
       <div className="mt-5 flex flex-wrap gap-3">

@@ -41,6 +41,15 @@ function validateBackupId(backupId: string): void {
   }
 }
 
+function isInsidePath(parentPath: string, childPath: string): boolean {
+  const resolvedParent = path.resolve(parentPath);
+  const resolvedChild = path.resolve(childPath);
+  const comparableParent = process.platform === 'win32' ? resolvedParent.toLowerCase() : resolvedParent;
+  const comparableChild = process.platform === 'win32' ? resolvedChild.toLowerCase() : resolvedChild;
+  const parentWithSeparator = comparableParent.endsWith(path.sep) ? comparableParent : `${comparableParent}${path.sep}`;
+  return comparableChild === comparableParent || comparableChild.startsWith(parentWithSeparator);
+}
+
 function resolveInsideProject(projectRoot: string, relativePath: string): string {
   if (!relativePath.trim()) {
     throw new Error('Patch contains an empty file path.');
@@ -55,15 +64,14 @@ function resolveInsideProject(projectRoot: string, relativePath: string): string
   }
 
   const absolutePath = path.resolve(projectRoot, normalized);
-  const relativeFromRoot = path.relative(projectRoot, absolutePath);
-  if (relativeFromRoot === '..' || relativeFromRoot.startsWith(`..${path.sep}`) || path.isAbsolute(relativeFromRoot)) {
+  if (!isInsidePath(projectRoot, absolutePath)) {
     throw new Error(`Patch file is outside the project: ${relativePath}`);
   }
 
   return absolutePath;
 }
 
-async function validateProjectRoot(folderPath: string): Promise<string> {
+async function validateProjectRoot(folderPath: string): Promise<{ projectRoot: string; projectRootRealPath: string }> {
   const projectRoot = path.resolve(folderPath);
   let stat;
   try {
@@ -74,10 +82,13 @@ async function validateProjectRoot(folderPath: string): Promise<string> {
   if (!stat.isDirectory()) {
     throw new Error('Project folder path is not a directory.');
   }
-  return projectRoot;
+  return {
+    projectRoot,
+    projectRootRealPath: await fs.realpath(projectRoot),
+  };
 }
 
-async function validatePatchFiles(projectRoot: string, patchPlan: PatchPlan): Promise<BackupMetadataFile[]> {
+async function validatePatchFiles(projectRoot: string, projectRootRealPath: string, patchPlan: PatchPlan): Promise<BackupMetadataFile[]> {
   if (!patchPlan.files.length) {
     throw new Error('Patch plan has no file changes to apply.');
   }
@@ -99,7 +110,12 @@ async function validatePatchFiles(projectRoot: string, patchPlan: PatchPlan): Pr
         failed.push({ relativePath: file.relativePath, status: 'failed', message: 'Target path is not a file.' });
         continue;
       }
-      const currentContent = await fs.readFile(targetAbsolutePath, 'utf8');
+      const realTargetAbsolutePath = await fs.realpath(targetAbsolutePath);
+      if (!isInsidePath(projectRootRealPath, realTargetAbsolutePath)) {
+        failed.push({ relativePath: file.relativePath, status: 'failed', message: 'Patch file is outside the project.' });
+        continue;
+      }
+      const currentContent = await fs.readFile(realTargetAbsolutePath, 'utf8');
       if (currentContent !== file.oldContent) {
         failed.push({ relativePath: file.relativePath, status: 'failed', message: 'File changed since patch was generated.' });
         continue;
@@ -107,7 +123,7 @@ async function validatePatchFiles(projectRoot: string, patchPlan: PatchPlan): Pr
       metadataFiles.push({
         relativePath: file.relativePath,
         originalContent: currentContent,
-        targetAbsolutePath,
+        targetAbsolutePath: realTargetAbsolutePath,
       });
     } catch (error) {
       failed.push({ relativePath: file.relativePath, status: 'failed', message: error instanceof Error ? error.message : 'Unable to validate file.' });
@@ -130,13 +146,13 @@ async function writeBackup(metadata: BackupMetadata): Promise<void> {
 
 async function rollbackMetadata(metadata: BackupMetadata): Promise<PatchRollbackFileResult[]> {
   const projectRoot = path.resolve(metadata.projectPath);
+  const projectRootRealPath = await fs.realpath(projectRoot);
   const results: PatchRollbackFileResult[] = [];
 
   for (const file of metadata.files) {
     try {
       const targetAbsolutePath = path.resolve(file.targetAbsolutePath);
-      const relativeFromRoot = path.relative(projectRoot, targetAbsolutePath);
-      if (relativeFromRoot === '..' || relativeFromRoot.startsWith(`..${path.sep}`) || path.isAbsolute(relativeFromRoot)) {
+      if (!isInsidePath(projectRootRealPath, targetAbsolutePath)) {
         throw new Error('Backup target is outside the original project.');
       }
       await fs.writeFile(targetAbsolutePath, file.originalContent, 'utf8');
@@ -150,8 +166,8 @@ async function rollbackMetadata(metadata: BackupMetadata): Promise<PatchRollback
 }
 
 export async function applyPatchPlan(folderPath: string, patchPlan: PatchPlan): Promise<ApplyPatchResponse> {
-  const projectRoot = await validateProjectRoot(folderPath);
-  const backupFiles = await validatePatchFiles(projectRoot, patchPlan);
+  const { projectRoot, projectRootRealPath } = await validateProjectRoot(folderPath);
+  const backupFiles = await validatePatchFiles(projectRoot, projectRootRealPath, patchPlan);
   const backupId = createBackupId();
   const appliedAt = new Date().toISOString();
   const metadata: BackupMetadata = {
@@ -171,9 +187,13 @@ export async function applyPatchPlan(folderPath: string, patchPlan: PatchPlan): 
   const appliedChanges: PatchFileChange[] = [];
 
   for (const file of patchPlan.files) {
-    const targetAbsolutePath = resolveInsideProject(projectRoot, file.relativePath);
+    const backupFile = backupFiles.find((item) => item.relativePath === file.relativePath);
+    if (!backupFile) {
+      appliedFiles.push({ relativePath: file.relativePath, status: 'skipped', message: 'File was not validated for apply.' });
+      continue;
+    }
     try {
-      await fs.writeFile(targetAbsolutePath, file.newContent, 'utf8');
+      await fs.writeFile(backupFile.targetAbsolutePath, file.newContent, 'utf8');
       appliedChanges.push(file);
       appliedFiles.push({ relativePath: file.relativePath, status: 'applied' });
     } catch (error) {

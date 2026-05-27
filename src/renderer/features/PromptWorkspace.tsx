@@ -3,6 +3,7 @@ import { useProjectStore } from '../stores/projectStore';
 import { PromptVariantCard } from '../components/PromptVariantCard';
 import { ContextFilesPanel } from '../components/ContextFilesPanel';
 import { PatchPreview } from '../components/PatchPreview';
+import { VerifyPanel } from '../components/VerifyPanel';
 import { createUnifiedDiff } from '../services/diff';
 import type { ProjectContext, ProjectContextSummary } from '../../shared/types';
 
@@ -109,6 +110,9 @@ export function PromptWorkspace(): JSX.Element {
     rollbackLastPatch,
     clearApplyResult,
     clearContextFiles,
+    saveProjectMemory,
+    createCurrentSession,
+    updateCurrentSession,
     setError,
   } = useProjectStore();
 
@@ -124,6 +128,7 @@ export function PromptWorkspace(): JSX.Element {
       clearContextFiles();
       clearExecution();
       clearApplyResult();
+      await saveProjectMemory(result.folderPath, result.scan.files);
     } catch (caughtError) {
       const message = caughtError instanceof Error ? caughtError.message : 'Unable to open project folder.';
       setError(message);
@@ -161,6 +166,12 @@ export function PromptWorkspace(): JSX.Element {
         projectContext: buildProjectContext(selectedFolder, scannedFiles),
       });
       setPromptOptimization(result.detectedIntent, result.variants);
+      await createCurrentSession();
+      await updateCurrentSession({
+        rawRequest: rawRequest.trim(),
+        detectedIntent: result.detectedIntent,
+        promptVariants: result.variants,
+      });
     } catch (caughtError) {
       const message = caughtError instanceof Error ? caughtError.message : 'Prompt optimization failed.';
       setError(message.replace(/^Error invoking remote method 'optimize-prompt': Error: /, ''));
@@ -220,6 +231,11 @@ export function PromptWorkspace(): JSX.Element {
         executionMode,
       });
       setExecutionResult(result);
+      await updateCurrentSession({
+        executionMode,
+        executionResult: result.content,
+        loadedContextFilePaths: loadedContextFiles.map((file) => file.relativePath),
+      });
       if (executionMode === 'patch') {
         if (!result.patchPlan) {
           throw new Error('AI did not return a valid patch plan.');
@@ -228,6 +244,13 @@ export function PromptWorkspace(): JSX.Element {
           result.patchPlan.files.map((file) => [file.relativePath, createUnifiedDiff(file.relativePath, file.oldContent, file.newContent)]),
         );
         setPatchPlan(result.patchPlan, result.patchWarnings ?? result.patchPlan.warnings, diffs);
+        await updateCurrentSession({
+          patchPlanSummary: {
+            summary: result.patchPlan.summary,
+            riskLevel: result.patchPlan.riskLevel,
+            changedFiles: result.patchPlan.files.map((file) => file.relativePath),
+          },
+        });
       }
     } catch (caughtError) {
       const message = caughtError instanceof Error ? caughtError.message : 'Task execution failed.';
@@ -267,7 +290,7 @@ export function PromptWorkspace(): JSX.Element {
   };
 
   const hasBlockingPatchWarning = patchWarnings.some((warning) =>
-    /not loaded as context|oldContent does not match|not safe to apply/i.test(warning),
+    /not loaded as context|removed from the preview|oldContent does not match|not safe to apply|stale/i.test(warning),
   );
   const canApplyPatch = Boolean(selectedFolder && patchPlan?.files.length && !hasBlockingPatchWarning && !applyLoading && !executionLoading);
 
@@ -383,9 +406,6 @@ export function PromptWorkspace(): JSX.Element {
             patchPlan={patchPlan}
             warnings={patchWarnings}
             diffTextByFile={diffTextByFile}
-            onCopyPatchJson={copyPatchJson}
-            onCopyDiff={copyDiff}
-            onDiscard={clearPatchPlan}
             applyLoading={applyLoading}
             applyError={applyError}
             lastApplyResult={lastApplyResult}
@@ -393,6 +413,9 @@ export function PromptWorkspace(): JSX.Element {
             rollbackError={rollbackError}
             rollbackResult={rollbackResult}
             canApply={canApplyPatch}
+            onCopyPatchJson={copyPatchJson}
+            onCopyDiff={copyDiff}
+            onDiscard={clearPatchPlan}
             onApply={async () => {
               if (!selectedFolder) return;
               await applyPatch(selectedFolder);
@@ -400,6 +423,8 @@ export function PromptWorkspace(): JSX.Element {
             onRollback={rollbackLastPatch}
           />
         ) : null}
+
+        <VerifyPanel selectedFolder={selectedFolder} />
       </section>
     </main>
   );

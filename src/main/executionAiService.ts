@@ -101,13 +101,8 @@ function formatProjectFilesContext(files: ProjectContextFile[] | undefined): str
 
 function extractJson(content: string): string {
   const trimmed = content.trim();
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)```\s*$/i);
   if (fenced?.[1]) return fenced[1].trim();
-  const firstBrace = trimmed.indexOf('{');
-  const lastBrace = trimmed.lastIndexOf('}');
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    return trimmed.slice(firstBrace, lastBrace + 1);
-  }
   return trimmed;
 }
 
@@ -166,11 +161,11 @@ function validatePatchAgainstContext(plan: PatchPlan, contextFiles: ProjectConte
   const validFiles = plan.files.filter((file) => {
     const contextFile = contextByPath.get(file.relativePath);
     if (!contextFile) {
-      warnings.push(`AI proposed changing ${file.relativePath}, but that file was not loaded as context. It is shown as a warning and must not be applied.`);
+      warnings.push(`AI proposed changing ${file.relativePath}, but that file was not loaded as context. This file was removed from the preview.`);
       return false;
     }
     if (file.oldContent !== contextFile.content) {
-      warnings.push(`oldContent does not match loaded context for ${file.relativePath}. Review only; this patch is not safe to apply.`);
+      warnings.push(`oldContent does not match loaded context for ${file.relativePath}. Review only; the diff may be stale.`);
     }
     return true;
   });

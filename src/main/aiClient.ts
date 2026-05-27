@@ -1,5 +1,8 @@
+import { BrowserWindow } from 'electron';
+import crypto from 'node:crypto';
 import type { AiSettings } from '../shared/types';
 import { validateAiSettings } from './aiSettingsService';
+import type { AiNetworkEvent } from '../shared/types';
 
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -22,6 +25,27 @@ export class AiApiError extends Error {
 export interface ChatCompletionResult {
   content: string;
   usage?: unknown;
+}
+
+const MAX_NETWORK_EVENTS = 100;
+const networkEvents: AiNetworkEvent[] = [];
+
+function rememberNetworkEvent(event: AiNetworkEvent): void {
+  networkEvents.unshift(event);
+  if (networkEvents.length > MAX_NETWORK_EVENTS) {
+    networkEvents.splice(MAX_NETWORK_EVENTS);
+  }
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send('ai:networkEvent', event);
+  }
+}
+
+export function listAiNetworkEvents(): AiNetworkEvent[] {
+  return [...networkEvents];
+}
+
+export function clearAiNetworkEvents(): void {
+  networkEvents.splice(0);
 }
 
 function readCompletionContent(json: ChatCompletionResponse): string {
@@ -101,19 +125,39 @@ export async function createChatCompletionResult(settings: AiSettings, messages:
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const url = `${settings.apiBase.replace(/\/$/, '')}/chat/completions`;
+  const body = JSON.stringify({ model: settings.model, messages, temperature: 0.4 });
+  const startedAtMs = Date.now();
+  const baseEvent = {
+    id: crypto.randomUUID(),
+    startedAt: new Date(startedAtMs).toISOString(),
+    method: 'POST' as const,
+    url,
+    model: settings.model,
+    requestBytes: Buffer.byteLength(body, 'utf8'),
+  };
 
   try {
-    const response = await fetch(`${settings.apiBase.replace(/\/$/, '')}/chat/completions`, {
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${settings.apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ model: settings.model, messages, temperature: 0.4 }),
+      body,
       signal: controller.signal,
     });
 
     const text = await response.text();
+    const finishedAtMs = Date.now();
+    rememberNetworkEvent({
+      ...baseEvent,
+      finishedAt: new Date(finishedAtMs).toISOString(),
+      status: response.status,
+      ok: response.ok,
+      durationMs: finishedAtMs - startedAtMs,
+      responseBytes: Buffer.byteLength(text, 'utf8'),
+    });
 
     if (!response.ok) {
       const detail = readHttpErrorDetail(text, response.headers.get('content-type'), response.statusText);
@@ -125,6 +169,16 @@ export async function createChatCompletionResult(settings: AiSettings, messages:
 
     return parseChatCompletionBody(text, response.status);
   } catch (error) {
+    if (!(error instanceof AiApiError)) {
+      const finishedAtMs = Date.now();
+      rememberNetworkEvent({
+        ...baseEvent,
+        finishedAt: new Date(finishedAtMs).toISOString(),
+        ok: false,
+        durationMs: finishedAtMs - startedAtMs,
+        error: error instanceof Error ? error.message : 'Unknown network error.',
+      });
+    }
     if (error instanceof AiApiError) throw error;
     if (error instanceof Error && error.name === 'AbortError') {
       throw new AiApiError('AI API request timed out. Please try again or check your local model.');

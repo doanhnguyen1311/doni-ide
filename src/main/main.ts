@@ -2,13 +2,26 @@ import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import path from 'node:path';
 import { scanProject } from './fileScanner';
 import { getAiSettings, saveAiSettings, validateAiSettings } from './aiSettingsService';
-import { testConnection } from './aiClient';
+import { clearAiNetworkEvents, listAiNetworkEvents, testConnection } from './aiClient';
 import { optimizePrompt } from './promptOptimizerService';
 import { executePrompt } from './executionAiService';
 import { readProjectFiles } from './projectFileReaderService';
 import { applyPatchPlan, rollbackPatch } from './patchApplyService';
+import { runProjectCommand, stopProjectCommand } from './commandRunnerService';
+import { analyzeCommandError } from './errorAnalyzerService';
+import {
+  clearProjectSessions,
+  createOrUpdateProjectMemory,
+  createSession,
+  deleteSession,
+  getSession,
+  listSessions,
+  updateSession,
+} from './sessionMemoryService';
 import type {
   AiSettings,
+  AiNetworkEvent,
+  AnalyzeCommandErrorRequest,
   ApplyPatchRequest,
   ApplyPatchResponse,
   ExecutePromptRequest,
@@ -20,6 +33,16 @@ import type {
   ReadProjectFilesResponse,
   RollbackPatchRequest,
   RollbackPatchResponse,
+  RunCommandRequest,
+  RunCommandResponse,
+  ErrorAnalysisResult,
+  CreateSessionRequest,
+  ProjectMemoryInfo,
+  ProjectSessionsRequest,
+  SaveProjectMemoryRequest,
+  SessionItem,
+  SessionRequest,
+  UpdateSessionRequest,
 } from '../shared/types';
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
@@ -105,9 +128,54 @@ ipcMain.handle('patch:rollback', async (_event, request: RollbackPatchRequest): 
   }
 });
 
+ipcMain.handle('command:run', async (event, request: RunCommandRequest): Promise<RunCommandResponse> => {
+  try {
+    if (!selectedProjectFolder || path.resolve(request.folderPath) !== selectedProjectFolder) {
+      throw new Error('Open a project folder before running a command.');
+    }
+    return await runProjectCommand(request.folderPath, request.command, {
+      onOutput: (payload) => event.sender.send('command:output', payload),
+      onError: (message) => event.sender.send('command:error', { message }),
+      onExit: (payload) => event.sender.send('command:exit', payload),
+    });
+  } catch (error) {
+    throw new Error(friendlyError(error));
+  }
+});
+
+ipcMain.handle('command:stop', async (): Promise<void> => {
+  stopProjectCommand();
+});
+
+ipcMain.handle('ai:analyzeCommandError', async (_event, request: AnalyzeCommandErrorRequest): Promise<ErrorAnalysisResult> => {
+  try {
+    const settings = await getAiSettings();
+    validateAiSettings(settings);
+    return await analyzeCommandError(request, settings);
+  } catch (error) {
+    throw new Error(friendlyError(error));
+  }
+});
+
+ipcMain.handle('memory:saveProject', async (_event, request: SaveProjectMemoryRequest): Promise<ProjectMemoryInfo> => createOrUpdateProjectMemory(request));
+ipcMain.handle('memory:createSession', async (_event, request: CreateSessionRequest): Promise<SessionItem> => createSession(request.projectId, request.initialData));
+ipcMain.handle('memory:updateSession', async (_event, request: UpdateSessionRequest): Promise<SessionItem> =>
+  updateSession(request.projectId, request.sessionId, request.partialData),
+);
+ipcMain.handle('memory:listSessions', async (_event, request: ProjectSessionsRequest): Promise<SessionItem[]> => listSessions(request.projectId));
+ipcMain.handle('memory:getSession', async (_event, request: SessionRequest): Promise<SessionItem> => getSession(request.projectId, request.sessionId));
+ipcMain.handle('memory:deleteSession', async (_event, request: SessionRequest): Promise<void> => deleteSession(request.projectId, request.sessionId));
+ipcMain.handle('memory:clearProjectSessions', async (_event, request: ProjectSessionsRequest): Promise<void> => clearProjectSessions(request.projectId));
+
 ipcMain.handle('settings:get', async (): Promise<AiSettings> => getAiSettings());
 
 ipcMain.handle('settings:save', async (_event, settings: AiSettings): Promise<AiSettings> => saveAiSettings(settings));
+
+ipcMain.handle('ai:listNetworkEvents', async (): Promise<AiNetworkEvent[]> => listAiNetworkEvents());
+
+ipcMain.handle('ai:clearNetworkEvents', async (): Promise<void> => {
+  clearAiNetworkEvents();
+});
 
 ipcMain.handle('ai:testConnection', async (_event, settings: AiSettings): Promise<{ ok: boolean; error?: string }> => {
   try {
@@ -146,6 +214,7 @@ ipcMain.handle('ai:executePrompt', async (_event, request: ExecutePromptRequest)
       selectedVariant: request.selectedVariant,
       detectedIntent: request.detectedIntent,
       contextFiles: request.contextFiles,
+      executionMode: request.executionMode,
     });
   } catch (error) {
     throw new Error(friendlyError(error));

@@ -32,16 +32,29 @@ type DroppedComposerFile = {
   isProjectFile: boolean;
 };
 
-type ProcessingStage = "idle" | "planning" | "loading-context" | "editing" | "summarizing";
+type ProcessingStage =
+  | "idle"
+  | "planning"
+  | "loading-context"
+  | "editing"
+  | "summarizing";
 
 const WORK_MODES: Array<{
   id: WorkMode;
   label: string;
   description: string;
 }> = [
-  { id: "quick", label: "Quick Ask", description: "Ask directly without planning" },
+  {
+    id: "quick",
+    label: "Quick Ask",
+    description: "Ask directly without planning",
+  },
   { id: "edit", label: "Edit No Plan", description: "Create a patch directly" },
-  { id: "agent", label: "Agent", description: "Let the coding agent plan and run" },
+  {
+    id: "agent",
+    label: "Agent",
+    description: "Let the coding agent plan and run",
+  },
 ];
 
 const EDIT_CONTEXT_EXTENSIONS = new Set([
@@ -190,7 +203,10 @@ function toComposerFile(projectFile: ProjectFile): DroppedComposerFile {
   };
 }
 
-function countChangedLines(oldContent: string, newContent: string): { added: number; removed: number } {
+function countChangedLines(
+  oldContent: string,
+  newContent: string,
+): { added: number; removed: number } {
   const oldLines = oldContent.split(/\r?\n/);
   const newLines = newContent.split(/\r?\n/);
   const maxLength = Math.max(oldLines.length, newLines.length);
@@ -225,7 +241,8 @@ function formatChangedFilesSummary(files: ProjectChangedFileSummary[]): string {
 
 function processingStageText(stage: ProcessingStage): string {
   if (stage === "planning") return "Đang đọc yêu cầu và lập hướng xử lý";
-  if (stage === "loading-context") return "Đang tải file context để chuẩn bị sửa";
+  if (stage === "loading-context")
+    return "Đang tải file context để chuẩn bị sửa";
   if (stage === "editing") return "Đang chỉnh sửa và tạo thay đổi";
   if (stage === "summarizing") return "Đang tổng hợp file đã sửa";
   return "Đang xử lý";
@@ -241,8 +258,13 @@ export function PromptWorkspace(): JSX.Element {
   const [composerDragActive, setComposerDragActive] = useState(false);
   const [submittedMessage, setSubmittedMessage] = useState("");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [processingStage, setProcessingStage] = useState<ProcessingStage>("idle");
-  const [changedFilesSummary, setChangedFilesSummary] = useState<ProjectChangedFileSummary[]>([]);
+  const [processingStage, setProcessingStage] =
+    useState<ProcessingStage>("idle");
+  const [changedFilesSummary, setChangedFilesSummary] = useState<
+    ProjectChangedFileSummary[]
+  >([]);
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalOutput, setTerminalOutput] = useState("");
   const [lastNetworkEvent, setLastNetworkEvent] =
     useState<AiNetworkEvent | null>(null);
   const executionStreamRef = useRef("");
@@ -330,6 +352,15 @@ export function PromptWorkspace(): JSX.Element {
     if (typeof window.doni.onAiExecutionStream !== "function") return;
     return window.doni.onAiExecutionStream((event) => {
       if (event.source === "codex") {
+        const prefix =
+          event.type === "stderr"
+            ? "[stderr] "
+            : event.type === "status"
+              ? "[status] "
+              : "";
+        setTerminalOutput((current) =>
+          `${current}${prefix}${event.data}`.slice(-80000),
+        );
         return;
       }
       const chunk =
@@ -345,6 +376,8 @@ export function PromptWorkspace(): JSX.Element {
       setSubmittedMessage("");
       setDraftRequest("");
       setChangedFilesSummary([]);
+      setTerminalOpen(false);
+      setTerminalOutput("");
       setProcessingStage("idle");
       clearExecutionStream();
       return;
@@ -371,6 +404,8 @@ export function PromptWorkspace(): JSX.Element {
     setSubmittedMessage(session.rawRequest);
     setDraftRequest("");
     setChangedFilesSummary([]);
+    setTerminalOpen(false);
+    setTerminalOutput("");
     setProcessingStage("idle");
     clearExecutionStream();
   }, [activeSessionId]);
@@ -675,9 +710,13 @@ export function PromptWorkspace(): JSX.Element {
     clearExecutionStream();
     clearPatchPlan();
     setChangedFilesSummary([]);
+    setTerminalOutput("");
+    setTerminalOpen(false);
     setExecutionStartedAt(startedAt);
     setExecutionFinishedAt(null);
-    setProcessingStage(executionMode === "patch" ? "loading-context" : "editing");
+    setProcessingStage(
+      executionMode === "patch" ? "loading-context" : "editing",
+    );
 
     try {
       const settings = await window.doni.getSettings();
@@ -713,7 +752,9 @@ export function PromptWorkspace(): JSX.Element {
           });
           setChangedFilesSummary(changeSummary.files);
           await refreshProjectScan(selectedFolder);
-          const changeSummaryText = formatChangedFilesSummary(changeSummary.files);
+          const changeSummaryText = formatChangedFilesSummary(
+            changeSummary.files,
+          );
           const savedExecutionResult = response.content.trim();
           finishExecutionChatMessage(
             changeSummaryText
@@ -896,6 +937,8 @@ export function PromptWorkspace(): JSX.Element {
     clearPatchPlan();
     setExecutionStartedAt(startedAt);
     setExecutionFinishedAt(null);
+    setTerminalOutput("");
+    setTerminalOpen(false);
     setProcessingStage("editing");
     setChangedFilesSummary([]);
     try {
@@ -924,7 +967,9 @@ export function PromptWorkspace(): JSX.Element {
       });
       setProcessingStage("summarizing");
       const changeSummary = canWrite
-        ? await window.doni.getProjectChangeSummary({ folderPath: selectedFolder })
+        ? await window.doni.getProjectChangeSummary({
+            folderPath: selectedFolder,
+          })
         : { files: [] };
       setChangedFilesSummary(changeSummary.files);
       if (canWrite) {
@@ -1357,7 +1402,9 @@ export function PromptWorkspace(): JSX.Element {
                         key={variant.id}
                         variant={variant}
                         isSelected={selectedPromptVariant === variant.id}
-                        onSelect={(variantId) => void selectPlanAndRun(variantId)}
+                        onSelect={(variantId) =>
+                          void selectPlanAndRun(variantId)
+                        }
                       />
                     ))}
                   </div>
@@ -1421,7 +1468,7 @@ export function PromptWorkspace(): JSX.Element {
               </div>
             ) : null}
 
-            {(isOptimizing || executionLoading || patchLoading) ? (
+            {isOptimizing || executionLoading || patchLoading ? (
               <div className="flex gap-3">
                 <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-skyglass/30 bg-skyglass/10 font-display text-xs font-black text-skyglass">
                   D
@@ -1442,7 +1489,30 @@ export function PromptWorkspace(): JSX.Element {
               </div>
             ) : null}
 
-            {streamLines.length ? (
+            {executionLoading || terminalOutput ? (
+              <div className="ml-11 max-w-4xl">
+                <button
+                  type="button"
+                  onClick={() => setTerminalOpen((value) => !value)}
+                  className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-bold text-slate-300 transition hover:border-skyglass/50 hover:text-skyglass"
+                >
+                  {terminalOpen ? "Ẩn terminal" : "Xem terminal"}
+                </button>
+                {terminalOpen ? (
+                  <div className="mt-3 overflow-hidden rounded-2xl border border-white/10 bg-black/70 shadow-glow">
+                    <div className="flex items-center justify-between border-b border-white/10 px-4 py-2 text-xs text-slate-500">
+                      <span>Codex CLI terminal</span>
+                      <span>{executionLoading ? "running" : "idle"}</span>
+                    </div>
+                    <pre className="max-h-80 overflow-auto whitespace-pre-wrap p-4 font-mono text-xs leading-5 text-slate-300">
+                      {terminalOutput || "Đang chờ Codex CLI ghi output..."}
+                    </pre>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {/* {streamLines.length ? (
               <div className="ml-11 max-w-3xl space-y-2">
                 {streamLines.map((line, index) => (
                   <div
@@ -1453,7 +1523,7 @@ export function PromptWorkspace(): JSX.Element {
                   </div>
                 ))}
               </div>
-            ) : null}
+            ) : null} */}
 
             {error || executionError || patchError ? (
               <div className="ml-11 rounded-2xl border border-ember/30 bg-ember/10 p-4 text-sm font-medium text-ember">
@@ -1574,7 +1644,9 @@ export function PromptWorkspace(): JSX.Element {
                       @repo {projectName}
                     </span>
                     <span className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-semibold text-slate-400">
-                      {droppedComposerFiles.length || selectedContextFilePaths.length} files
+                      {droppedComposerFiles.length ||
+                        selectedContextFilePaths.length}{" "}
+                      files
                     </span>
                     <span className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-semibold text-slate-400">
                       {executionMode === "patch" ? "#patch" : "#answer"}

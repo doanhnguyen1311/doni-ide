@@ -14,6 +14,9 @@ interface SidebarProps {
   fileCount: number;
   files: ProjectFile[];
   projectSummary: ProjectSummary | null;
+  activeView: 'workspace' | 'settings';
+  onOpenWorkspace: () => void;
+  onOpenSettings: () => void;
 }
 
 function buildTree(files: ProjectFile[]): TreeNode {
@@ -46,10 +49,10 @@ function TreeItem({ node, depth, selectedFolder }: { node: TreeNode; depth: numb
     <div>
       <button
         type="button"
-        draggable={isFile}
+        draggable
         onDragStart={(event) => {
-          if (!isFile) return;
           event.dataTransfer.effectAllowed = 'copy';
+          event.dataTransfer.setData('application/x-doni-project-entry-kind', isFile ? 'file' : 'folder');
           event.dataTransfer.setData('application/x-doni-project-file', node.path);
           event.dataTransfer.setData('text/plain', node.path);
         }}
@@ -57,7 +60,7 @@ function TreeItem({ node, depth, selectedFolder }: { node: TreeNode; depth: numb
           if (isFile) void previewProjectFile(selectedFolder, node.path);
           else setOpen((value) => !value);
         }}
-        className={`flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-slate-300 transition hover:bg-white/[0.06] hover:text-white ${isFile ? 'cursor-grab active:cursor-grabbing' : ''}`}
+        className="flex w-full min-w-0 cursor-grab items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-slate-300 transition hover:bg-white/[0.06] hover:text-white active:cursor-grabbing"
         style={{ paddingLeft: `${8 + depth * 12}px` }}
       >
         <span className="w-4 shrink-0 text-slate-500">{isFile ? '-' : open ? 'v' : '>'}</span>
@@ -68,7 +71,7 @@ function TreeItem({ node, depth, selectedFolder }: { node: TreeNode; depth: numb
   );
 }
 
-export function Sidebar({ selectedFolder, fileCount, files, projectSummary }: SidebarProps): JSX.Element {
+export function Sidebar({ selectedFolder, fileCount, files, projectSummary, activeView, onOpenWorkspace, onOpenSettings }: SidebarProps): JSX.Element {
   const tree = useMemo(() => buildTree(files), [files]);
   const rootChildren = Array.from(tree.children.values()).sort((a, b) => Number(Boolean(a.file)) - Number(Boolean(b.file)) || a.name.localeCompare(b.name));
   const codexStatus = useProjectStore((state) => state.codexStatus);
@@ -89,18 +92,38 @@ export function Sidebar({ selectedFolder, fileCount, files, projectSummary }: Si
   return (
     <aside className="flex h-full w-80 shrink-0 flex-col border-r border-white/10 bg-panel/95">
       <div className="border-b border-white/10 p-5">
-        <div className="mb-2 inline-flex rounded-full border border-ember/30 bg-ember/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.28em] text-ember">
-          Codex V2
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div className="inline-flex rounded-full border border-ember/30 bg-ember/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.28em] text-ember">
+            D O A N H D E V
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onOpenWorkspace}
+              title="Trang chính"
+              className={`grid h-9 w-9 place-items-center rounded-xl border text-sm font-bold transition ${
+                activeView === 'workspace' ? 'border-mint/40 bg-mint/10 text-mint' : 'border-white/10 text-slate-400 hover:border-mint/40 hover:text-mint'
+              }`}
+            >
+              D
+            </button>
+            <button
+              type="button"
+              onClick={onOpenSettings}
+              title="Cài đặt"
+              className={`grid h-9 w-9 place-items-center rounded-xl border text-lg transition ${
+                activeView === 'settings' ? 'border-skyglass/40 bg-skyglass/10 text-skyglass' : 'border-white/10 text-slate-400 hover:border-skyglass/40 hover:text-skyglass'
+              }`}
+            >
+              ⚙
+            </button>
+          </div>
         </div>
         <h1 className="font-display text-3xl font-bold tracking-tight text-white">Doni</h1>
-        <p className="mt-2 text-sm leading-6 text-slate-400">Bộ não AI cạnh VS Code.</p>
+        <p className="mt-2 text-sm leading-6 text-slate-400">AI Generate</p>
       </div>
 
       <div className="space-y-3 border-b border-white/10 p-4">
-        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Dự án</p>
-          <p className="mt-2 break-words text-xs font-medium text-slate-200">{selectedFolder ?? 'Chưa chọn thư mục'}</p>
-        </div>
         <div className="grid grid-cols-2 gap-2">
           <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
             <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Tệp</p>
@@ -120,9 +143,6 @@ export function Sidebar({ selectedFolder, fileCount, files, projectSummary }: Si
             {[...projectSummary.technologies, ...projectSummary.frameworks].slice(0, 8).map((item) => (
               <span key={item} className="rounded-full border border-white/10 bg-ink/60 px-2 py-1 text-xs text-slate-300">{item}</span>
             ))}
-          </div>
-          <div className="mt-3 space-y-1 text-xs leading-5 text-slate-500">
-            {projectSummary.entryPoints.slice(0, 3).map((file) => <div key={file} className="truncate font-mono">{file}</div>)}
           </div>
         </div>
       ) : null}
@@ -160,21 +180,15 @@ export function Sidebar({ selectedFolder, fileCount, files, projectSummary }: Si
             {hasWeeklyRemainingPercent ? (
               <div className="mt-1 flex items-center justify-between text-xs text-slate-600">
                 <span>Giới hạn tuần</span>
-                <span>{codexStatus.weeklyRemainingPercent.toFixed(0)}% còn lại</span>
+                <span>{codexStatus?.weeklyRemainingPercent.toFixed(0) ?? null}% còn lại</span>
               </div>
             ) : null}
           </div>
           <div className="mt-3 space-y-1 text-xs leading-5 text-slate-500">
-            <div>Prompt: {codexStatus?.promptCount ?? 0}</div>
-            <div>Lần cuối: {codexStatus?.lastRunAt ? new Date(codexStatus.lastRunAt).toLocaleTimeString() : 'n/a'}</div>
-            <div>Kiểm tra: {codexStatus?.lastProbeAt ? new Date(codexStatus.lastProbeAt).toLocaleTimeString() : 'n/a'}</div>
             {codexStatus?.lastDurationMs ? <div>Thời lượng: {(codexStatus.lastDurationMs / 1000).toFixed(1)}s</div> : null}
             {tokenText ? <div>Token: {tokenText}{contextText ? ` / ${contextText}` : ''}</div> : null}
             {codexStatus?.lastModel ? <div>Model: {codexStatus.lastModel}</div> : null}
           </div>
-          {codexStatus?.remainingSource ? <div className="mt-2 rounded-xl bg-ink/50 p-2 text-xs text-slate-500">{codexStatus.remainingSource}</div> : null}
-          {codexStatus?.weeklyRemainingSource ? <div className="mt-2 rounded-xl bg-ink/50 p-2 text-xs text-slate-500">{codexStatus.weeklyRemainingSource}</div> : null}
-          {codexStatus?.usageSummary ? <div className="mt-2 rounded-xl bg-ink/50 p-2 text-xs text-slate-500">{codexStatus.usageSummary}</div> : null}
           {codexStatus?.error ? <div className="mt-2 rounded-xl bg-ember/10 p-2 text-xs text-ember">{codexStatus.error}</div> : null}
         </div>
       </div>

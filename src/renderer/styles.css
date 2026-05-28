@@ -29,6 +29,17 @@ textarea {
   font: inherit;
 }
 
+.app-titlebar {
+  -webkit-app-region: drag;
+}
+
+button,
+input,
+select,
+textarea {
+  -webkit-app-region: no-drag;
+}
+
 ::selection {
   background: rgba(76, 224, 179, 0.35);
 }

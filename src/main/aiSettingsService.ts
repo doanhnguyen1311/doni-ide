@@ -7,6 +7,16 @@ const SETTINGS_FILE = 'ai-settings.json';
 const DEFAULT_MAX_CONTEXT_FILES = 10;
 const DEFAULT_IGNORE_PATTERNS = ['node_modules', 'dist', 'build', '.git', 'coverage', '.next', '.turbo', '.doni'];
 
+function normalizeCustomModels(settings: Partial<AiSettings>): string[] {
+  const modelCandidates = [
+    ...(Array.isArray(settings.customModels) ? settings.customModels : []),
+    settings.model,
+    settings.plannerModel,
+    settings.executorModel,
+  ];
+  return Array.from(new Set(modelCandidates.map((item) => item?.trim()).filter((item): item is string => Boolean(item))));
+}
+
 function getSettingsPath(): string {
   return path.join(app.getPath('userData'), SETTINGS_FILE);
 }
@@ -22,6 +32,8 @@ export async function getAiSettings(): Promise<AiSettings> {
       model,
       plannerModel: parsed.plannerModel ?? model,
       executorModel: parsed.executorModel ?? model,
+      customModels: normalizeCustomModels(parsed),
+      executorProvider: parsed.executorProvider === 'codex' ? 'codex' : 'custom',
       maxContextFiles: parsed.maxContextFiles ?? DEFAULT_MAX_CONTEXT_FILES,
       ignorePatterns: Array.isArray(parsed.ignorePatterns) ? parsed.ignorePatterns : DEFAULT_IGNORE_PATTERNS,
       autoBackup: parsed.autoBackup ?? true,
@@ -37,6 +49,8 @@ export async function getAiSettings(): Promise<AiSettings> {
         model: '',
         plannerModel: '',
         executorModel: '',
+        customModels: [],
+        executorProvider: 'custom',
         maxContextFiles: DEFAULT_MAX_CONTEXT_FILES,
         ignorePatterns: DEFAULT_IGNORE_PATTERNS,
         autoBackup: true,
@@ -49,12 +63,16 @@ export async function getAiSettings(): Promise<AiSettings> {
 }
 
 export async function saveAiSettings(settings: AiSettings): Promise<AiSettings> {
+  const plannerModel = (settings.plannerModel || settings.model).trim();
+  const executorModel = (settings.executorModel || settings.model).trim();
   const normalized: AiSettings = {
     apiBase: settings.apiBase.trim().replace(/\/$/, ''),
     apiKey: settings.apiKey.trim(),
-    model: (settings.executorModel || settings.model).trim(),
-    plannerModel: (settings.plannerModel || settings.model).trim(),
-    executorModel: (settings.executorModel || settings.model).trim(),
+    model: executorModel,
+    plannerModel,
+    executorModel,
+    customModels: normalizeCustomModels({ ...settings, plannerModel, executorModel, model: executorModel }),
+    executorProvider: settings.executorProvider === 'codex' ? 'codex' : 'custom',
     maxContextFiles: Math.max(1, Math.min(30, Math.round(settings.maxContextFiles || DEFAULT_MAX_CONTEXT_FILES))),
     ignorePatterns: settings.ignorePatterns?.map((item) => item.trim()).filter(Boolean) ?? DEFAULT_IGNORE_PATTERNS,
     autoBackup: settings.autoBackup !== false,

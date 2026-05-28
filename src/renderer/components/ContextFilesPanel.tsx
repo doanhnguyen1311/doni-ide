@@ -9,6 +9,11 @@ const API_TERMS = ['api', 'request', 'fetch', 'service'];
 const STORE_TERMS = ['store', 'state', 'zustand', 'redux'];
 const ROUTE_TERMS = ['route', 'page', 'screen', 'trang'];
 
+interface DroppedFolder {
+  path: string;
+  filePaths: string[];
+}
+
 function tokenizeRequest(rawRequest: string): string[] {
   return rawRequest
     .toLowerCase()
@@ -60,6 +65,7 @@ export function ContextFilesPanel({
   rawRequest: string;
 }): JSX.Element {
   const [dragActive, setDragActive] = useState(false);
+  const [droppedFolders, setDroppedFolders] = useState<DroppedFolder[]>([]);
   const {
     selectedContextFilePaths,
     loadedContextFiles,
@@ -81,6 +87,24 @@ export function ContextFilesPanel({
     () => selectedContextFilePaths.filter((filePath) => supportedFilePaths.has(filePath)),
     [selectedContextFilePaths, supportedFilePaths],
   );
+  const visibleDroppedFolders = useMemo(
+    () =>
+      droppedFolders
+        .map((folder) => ({
+          ...folder,
+          selectedCount: folder.filePaths.filter((filePath) => selectedContextFilePaths.includes(filePath)).length,
+        }))
+        .filter((folder) => folder.selectedCount > 0),
+    [droppedFolders, selectedContextFilePaths],
+  );
+  const selectedStandaloneFiles = useMemo(
+    () =>
+      selectedFiles.filter(
+        (filePath) =>
+          !visibleDroppedFolders.some((folder) => filePath.startsWith(folder.path.endsWith('/') ? folder.path : `${folder.path}/`)),
+      ),
+    [selectedFiles, visibleDroppedFolders],
+  );
   const suggested = useMemo(() => suggestFiles(scannedFiles, rawRequest), [scannedFiles, rawRequest]);
 
   useEffect(() => {
@@ -91,19 +115,60 @@ export function ContextFilesPanel({
     void window.doni.getSettings?.().then((settings) => setMaxContextFiles(settings.maxContextFiles)).catch(() => undefined);
   }, [setMaxContextFiles]);
 
+  useEffect(() => {
+    setDroppedFolders([]);
+  }, [selectedFolder]);
+
   const loadSelected = async (): Promise<void> => {
     if (!selectedFolder) return;
     await loadContextFiles(selectedFolder);
   };
 
-  const addDroppedFile = (filePath: string): void => {
-    const normalizedPath = filePath.replace(/\\/g, '/').trim();
+  const clearSelected = (): void => {
+    setDroppedFolders([]);
+    clearContextFiles();
+  };
+
+  const addDroppedPath = (filePath: string, entryKind?: string): void => {
+    const normalizedPath = filePath.replace(/\\/g, '/').replace(/^\/+/, '').trim();
     if (!normalizedPath) return;
-    if (!supportedFilePaths.has(normalizedPath)) {
-      useProjectStore.setState({ contextError: 'Chỉ kéo tệp code/text đã được quét từ cây dự án bên trái.' });
+
+    if (supportedFilePaths.has(normalizedPath)) {
+      addContextFile(normalizedPath);
       return;
     }
-    addContextFile(normalizedPath);
+
+    const folderPrefix = normalizedPath.endsWith('/') ? normalizedPath : `${normalizedPath}/`;
+    const filesInFolder = supportedFiles
+      .map((file) => file.relativePath)
+      .filter((relativePath) => relativePath.startsWith(folderPrefix))
+      .sort((a, b) => a.localeCompare(b));
+
+    if (!filesInFolder.length) {
+      useProjectStore.setState({
+        contextError:
+          entryKind === 'folder'
+            ? 'Folder này không có tệp code/text hợp lệ để làm ngữ cảnh.'
+            : 'Chỉ kéo tệp hoặc folder code/text đã được quét từ cây dự án bên trái.',
+      });
+      return;
+    }
+
+    setDroppedFolders((current) => {
+      const nextFolder = { path: normalizedPath, filePaths: filesInFolder };
+      const existingIndex = current.findIndex((folder) => folder.path === normalizedPath);
+      if (existingIndex === -1) return [...current, nextFolder];
+      return current.map((folder, index) => (index === existingIndex ? nextFolder : folder));
+    });
+    filesInFolder.forEach((relativePath) => addContextFile(relativePath));
+  };
+
+  const removeFolder = (folderPath: string): void => {
+    const folderPrefix = folderPath.endsWith('/') ? folderPath : `${folderPath}/`;
+    selectedContextFilePaths
+      .filter((filePath) => filePath.startsWith(folderPrefix))
+      .forEach((filePath) => toggleContextFile(filePath));
+    setDroppedFolders((current) => current.filter((folder) => folder.path !== folderPath));
   };
 
   const handleDragOver = (event: DragEvent<HTMLDivElement>): void => {
@@ -116,7 +181,8 @@ export function ContextFilesPanel({
     event.preventDefault();
     setDragActive(false);
     const filePath = event.dataTransfer.getData('application/x-doni-project-file') || event.dataTransfer.getData('text/plain');
-    addDroppedFile(filePath);
+    const entryKind = event.dataTransfer.getData('application/x-doni-project-entry-kind');
+    addDroppedPath(filePath, entryKind);
   };
 
   return (
@@ -125,7 +191,7 @@ export function ContextFilesPanel({
         <div>
           <p className="text-sm font-semibold uppercase tracking-[0.24em] text-skyglass">Bước 4: Ngữ cảnh dự án</p>
           <h3 className="mt-3 font-display text-2xl font-semibold text-white">Tệp ngữ cảnh</h3>
-          <p className="mt-2 text-sm text-slate-500">Kéo tệp từ cây dự án bên trái rồi thả vào vùng bên dưới để gửi làm ngữ cảnh cho AI.</p>
+          <p className="mt-2 text-sm text-slate-500">Kéo tệp hoặc folder từ cây dự án bên trái rồi thả vào vùng bên dưới để gửi làm ngữ cảnh cho AI.</p>
         </div>
         <div className="rounded-full border border-mint/30 bg-mint/10 px-4 py-2 text-sm font-semibold text-mint">
           {selectedContextFilePaths.length}/{maxContextFiles} đã chọn
@@ -154,7 +220,7 @@ export function ContextFilesPanel({
           dragActive ? 'border-mint bg-mint/10 text-mint' : 'border-white/15 bg-ink/30 text-slate-400'
         }`}
       >
-        <div className="text-sm font-semibold text-white">Thả tệp từ cây dự án vào đây</div>
+        <div className="text-sm font-semibold text-white">Thả tệp hoặc folder từ cây dự án vào đây</div>
         <div className="mt-2 text-sm">
           {selectedFolder ? 'Chỉ nhận tệp trong dự án đang mở và thuộc định dạng ngữ cảnh được hỗ trợ.' : 'Hãy mở thư mục dự án trước.'}
         </div>
@@ -162,7 +228,48 @@ export function ContextFilesPanel({
 
       <div className="mt-5">
         <div className="mb-3 text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Tệp đã chọn</div>
-        {selectedFiles.length ? (
+        {visibleDroppedFolders.length || selectedStandaloneFiles.length ? (
+          <div className="grid gap-3 sm:grid-cols-2">
+            {visibleDroppedFolders.map((folder) => (
+              <div key={folder.path} className="flex min-w-0 items-center gap-3 rounded-2xl border border-skyglass/20 bg-skyglass/10 px-4 py-3 text-sm text-slate-200">
+                <div className="grid h-10 w-14 shrink-0 place-items-center rounded-xl border border-skyglass/30 bg-skyglass/10 text-[10px] font-black text-skyglass">
+                  FOLDER
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-mono text-sm font-semibold text-white">{folder.path}</div>
+                  <div className="mt-1 text-xs text-slate-500">Folder - {folder.selectedCount} tep</div>
+                </div>
+                <button
+                  type="button"
+                  aria-label={`Xoa folder ${folder.path}`}
+                  onClick={() => removeFolder(folder.path)}
+                  className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-white/10 text-lg font-bold leading-none text-slate-400 transition hover:border-ember/50 hover:text-ember"
+                >
+                  x
+                </button>
+              </div>
+            ))}
+            {selectedStandaloneFiles.map((filePath) => (
+              <div key={filePath} className="flex min-w-0 items-center gap-3 rounded-2xl border border-white/10 bg-ink/50 px-4 py-3 text-sm text-slate-300">
+                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-white/10 bg-white/[0.04] text-[10px] font-black text-slate-300">
+                  FILE
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-mono text-sm font-semibold text-slate-100">{filePath}</div>
+                  <div className="mt-1 text-xs text-slate-500">File ngu canh</div>
+                </div>
+                <button
+                  type="button"
+                  aria-label={`Xoa file ${filePath}`}
+                  onClick={() => toggleContextFile(filePath)}
+                  className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-white/10 text-lg font-bold leading-none text-slate-400 transition hover:border-ember/50 hover:text-ember"
+                >
+                  x
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : false && selectedFiles.length ? (
           <div className="grid gap-2">
             {selectedFiles.map((filePath) => (
               <div key={filePath} className="flex min-w-0 items-center justify-between gap-3 rounded-2xl border border-white/10 bg-ink/50 px-3 py-2 text-sm text-slate-300">
@@ -182,10 +289,10 @@ export function ContextFilesPanel({
 
       <div className="mt-5 flex flex-wrap gap-3">
         <button type="button" onClick={loadSelected} disabled={!selectedFolder || contextLoading || selectedContextFilePaths.length === 0} className="rounded-full bg-mint px-5 py-3 text-sm font-extrabold text-ink transition hover:bg-mint/90 disabled:cursor-not-allowed disabled:opacity-50">
-          {contextLoading ? 'Đang tải ngữ cảnh...' : 'Tải ngữ cảnh đã chọn'}
+          {contextLoading ? 'Đang tải tệp...' : 'Tải tệp đã chọn'}
         </button>
-        <button type="button" onClick={clearContextFiles} disabled={!selectedContextFilePaths.length && !loadedContextFiles.length} className="rounded-full border border-white/10 px-4 py-3 text-sm font-semibold text-white transition hover:border-ember/50 hover:text-ember disabled:cursor-not-allowed disabled:opacity-40">
-          Xóa ngữ cảnh
+        <button type="button" onClick={clearSelected} disabled={!selectedContextFilePaths.length && !loadedContextFiles.length} className="rounded-full border border-white/10 px-4 py-3 text-sm font-semibold text-white transition hover:border-ember/50 hover:text-ember disabled:cursor-not-allowed disabled:opacity-40">
+          Xóa tệp đã chọn
         </button>
       </div>
 

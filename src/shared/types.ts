@@ -343,6 +343,8 @@ export interface AiSettings {
   model: string;
   plannerModel: string;
   executorModel: string;
+  customModels: string[];
+  executorProvider: 'custom' | 'codex';
   maxContextFiles: number;
   ignorePatterns: string[];
   autoBackup: boolean;
@@ -372,6 +374,7 @@ export interface ElectronApi {
   testConnection: (settings: AiSettings) => Promise<{ ok: boolean; error?: string }>;
   getAiNetworkEvents: () => Promise<AiNetworkEvent[]>;
   clearAiNetworkEvents: () => Promise<void>;
+  cancelActiveAi: () => Promise<void>;
   onAiNetworkEvent: (callback: (event: AiNetworkEvent) => void) => () => void;
   optimizePrompt: (request: OptimizePromptRequest) => Promise<OptimizePromptResponse>;
   executePrompt: (request: ExecutePromptRequest) => Promise<ExecutePromptResponse>;
@@ -380,6 +383,7 @@ export interface ElectronApi {
   getCodexCliStatus: () => Promise<CodexCliStatus>;
   probeCodexCliStatus: (request?: ProbeCodexCliRequest) => Promise<CodexCliStatus>;
   runCodexCli: (request: RunCodexCliRequest) => Promise<RunCodexCliResponse>;
+  stopCodexCli: () => Promise<void>;
   applyPatch: (request: ApplyPatchRequest) => Promise<ApplyPatchResponse>;
   rollbackPatch: (request: RollbackPatchRequest) => Promise<RollbackPatchResponse>;
   runProjectCommand: (request: RunCommandRequest) => Promise<RunCommandResponse>;

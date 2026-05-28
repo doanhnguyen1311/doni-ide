@@ -29,6 +29,7 @@ export interface ChatCompletionResult {
 
 const MAX_NETWORK_EVENTS = 100;
 const networkEvents: AiNetworkEvent[] = [];
+const activeControllers = new Set<AbortController>();
 
 function rememberNetworkEvent(event: AiNetworkEvent): void {
   networkEvents.unshift(event);
@@ -124,6 +125,7 @@ export async function createChatCompletionResult(settings: AiSettings, messages:
   }
 
   const controller = new AbortController();
+  activeControllers.add(controller);
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const url = `${settings.apiBase.replace(/\/$/, '')}/chat/completions`;
   const body = JSON.stringify({ model: settings.model, messages, temperature: 0.4 });
@@ -181,12 +183,20 @@ export async function createChatCompletionResult(settings: AiSettings, messages:
     }
     if (error instanceof AiApiError) throw error;
     if (error instanceof Error && error.name === 'AbortError') {
-      throw new AiApiError('Request AI API quá thời gian. Hãy thử lại hoặc kiểm tra model cục bộ.');
+      throw new AiApiError('Request AI API đã bị dừng hoặc quá thời gian. Hãy thử lại nếu cần.');
     }
     throw new AiApiError('Không thể kết nối AI API. Hãy kiểm tra URL API Base và dịch vụ có đang chạy không.');
   } finally {
+    activeControllers.delete(controller);
     clearTimeout(timeout);
   }
+}
+
+export function cancelActiveAiRequests(): void {
+  for (const controller of activeControllers) {
+    controller.abort();
+  }
+  activeControllers.clear();
 }
 
 export async function createChatCompletion(settings: AiSettings, messages: ChatMessage[], timeoutMs = 30000): Promise<string> {

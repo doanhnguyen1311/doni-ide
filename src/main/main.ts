@@ -1,16 +1,16 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, Menu, dialog, ipcMain } from 'electron';
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { scanProject } from './fileScanner';
 import { getAiSettings, saveAiSettings, validateAiSettings } from './aiSettingsService';
-import { clearAiNetworkEvents, listAiNetworkEvents, testConnection } from './aiClient';
+import { cancelActiveAiRequests, clearAiNetworkEvents, listAiNetworkEvents, testConnection } from './aiClient';
 import { optimizePrompt } from './promptOptimizerService';
 import { executePrompt } from './executionAiService';
 import { readProjectFiles } from './projectFileReaderService';
 import { applyPatchPlan, rollbackPatch } from './patchApplyService';
 import { runProjectCommand, stopProjectCommand } from './commandRunnerService';
-import { getCodexCliStatus, probeCodexCliStatus, runCodexCli } from './codexCliService';
+import { getCodexCliStatus, probeCodexCliStatus, runCodexCli, stopCodexCli } from './codexCliService';
 import { analyzeCommandError } from './errorAnalyzerService';
 import {
   clearProjectSessions,
@@ -62,6 +62,8 @@ function friendlyError(error: unknown): string {
 }
 
 function createMainWindow(): void {
+  Menu.setApplicationMenu(null);
+
   const window = new BrowserWindow({
     width: 1200,
     height: 760,
@@ -69,6 +71,13 @@ function createMainWindow(): void {
     minHeight: 640,
     backgroundColor: '#05070b',
     title: 'Doni',
+    autoHideMenuBar: true,
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#05070b',
+      symbolColor: '#cbd5e1',
+      height: 36,
+    },
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
@@ -157,6 +166,10 @@ ipcMain.handle('codex:run', async (_event, request: RunCodexCliRequest): Promise
   }
 });
 
+ipcMain.handle('codex:stop', async (): Promise<void> => {
+  stopCodexCli();
+});
+
 ipcMain.handle('patch:apply', async (_event, request: ApplyPatchRequest): Promise<ApplyPatchResponse> => {
   try {
     if (!selectedProjectFolder || path.resolve(request.folderPath) !== selectedProjectFolder) {
@@ -223,6 +236,11 @@ ipcMain.handle('ai:listNetworkEvents', async (): Promise<AiNetworkEvent[]> => li
 
 ipcMain.handle('ai:clearNetworkEvents', async (): Promise<void> => {
   clearAiNetworkEvents();
+});
+
+ipcMain.handle('ai:cancelActive', async (): Promise<void> => {
+  cancelActiveAiRequests();
+  stopCodexCli();
 });
 
 ipcMain.handle('ai:testConnection', async (_event, settings: AiSettings): Promise<{ ok: boolean; error?: string }> => {

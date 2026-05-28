@@ -42,6 +42,7 @@ const electronApi: ElectronApi = {
   testConnection: (settings: AiSettings): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('ai:testConnection', settings),
   getAiNetworkEvents: (): Promise<AiNetworkEvent[]> => ipcRenderer.invoke('ai:listNetworkEvents'),
   clearAiNetworkEvents: (): Promise<void> => ipcRenderer.invoke('ai:clearNetworkEvents'),
+  cancelActiveAi: (): Promise<void> => ipcRenderer.invoke('ai:cancelActive'),
   onAiNetworkEvent: (callback: (event: AiNetworkEvent) => void): (() => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: AiNetworkEvent): void => callback(payload);
     ipcRenderer.on('ai:networkEvent', listener);
@@ -54,6 +55,7 @@ const electronApi: ElectronApi = {
   getCodexCliStatus: (): Promise<CodexCliStatus> => ipcRenderer.invoke('codex:status'),
   probeCodexCliStatus: (request?: ProbeCodexCliRequest): Promise<CodexCliStatus> => ipcRenderer.invoke('codex:probe', request),
   runCodexCli: (request: RunCodexCliRequest): Promise<RunCodexCliResponse> => ipcRenderer.invoke('codex:run', request),
+  stopCodexCli: (): Promise<void> => ipcRenderer.invoke('codex:stop'),
   applyPatch: (request: ApplyPatchRequest): Promise<ApplyPatchResponse> => ipcRenderer.invoke('patch:apply', request),
   rollbackPatch: (request: RollbackPatchRequest): Promise<RollbackPatchResponse> => ipcRenderer.invoke('patch:rollback', request),
   runProjectCommand: (request: RunCommandRequest): Promise<RunCommandResponse> => ipcRenderer.invoke('command:run', request),

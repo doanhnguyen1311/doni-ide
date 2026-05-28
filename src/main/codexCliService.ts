@@ -7,6 +7,7 @@ import type { CodexCliStatus, RunCodexCliRequest, RunCodexCliResponse } from '..
 
 const execFileAsync = promisify(execFile);
 const CODEX_TIMEOUT_MS = 10 * 60 * 1000;
+const activeCodexChildren = new Set<ReturnType<typeof spawn>>();
 let lastCodexUsage: Pick<
   CodexCliStatus,
   | 'remainingPercent'
@@ -315,6 +316,7 @@ export async function runCodexCli(request: RunCodexCliRequest): Promise<RunCodex
       env: process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    activeCodexChildren.add(child);
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -323,6 +325,7 @@ export async function runCodexCli(request: RunCodexCliRequest): Promise<RunCodex
       if (settled) return;
       settled = true;
       child.kill();
+      activeCodexChildren.delete(child);
       reject(new Error('Codex CLI timed out after 10 minutes.'));
     }, CODEX_TIMEOUT_MS);
 
@@ -336,12 +339,14 @@ export async function runCodexCli(request: RunCodexCliRequest): Promise<RunCodex
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      activeCodexChildren.delete(child);
       reject(error);
     });
     child.on('close', async (exitCode) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      activeCodexChildren.delete(child);
       const finishedAt = new Date().toISOString();
       const content = await fs.readFile(outputFile, 'utf8').catch(() => stdout || stderr);
       await fs.unlink(outputFile).catch(() => undefined);
@@ -392,6 +397,13 @@ export async function runCodexCli(request: RunCodexCliRequest): Promise<RunCodex
       });
     });
   });
+}
+
+export function stopCodexCli(): void {
+  for (const child of activeCodexChildren) {
+    child.kill();
+  }
+  activeCodexChildren.clear();
 }
 
 export async function probeCodexCliStatus(folderPath?: string): Promise<CodexCliStatus> {

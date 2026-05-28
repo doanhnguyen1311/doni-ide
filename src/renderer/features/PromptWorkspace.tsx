@@ -1,9 +1,10 @@
-﻿import { useEffect, useState } from "react";
+﻿import { useEffect, useRef, useState } from "react";
 import { useProjectStore } from "../stores/projectStore";
 import { PromptVariantCard } from "../components/PromptVariantCard";
 import { PatchPreview } from "../components/PatchPreview";
 import { createUnifiedDiff } from "../services/diff";
 import type {
+  AiExecutionStreamEvent,
   AiNetworkEvent,
   DetectedIntent,
   ProjectContext,
@@ -119,6 +120,11 @@ export function PromptWorkspace(): JSX.Element {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [lastNetworkEvent, setLastNetworkEvent] =
     useState<AiNetworkEvent | null>(null);
+  const [executionStreamText, setExecutionStreamText] = useState("");
+  const [executionStreamSource, setExecutionStreamSource] = useState<
+    AiExecutionStreamEvent["source"] | null
+  >(null);
+  const executionStreamRef = useRef("");
   const [stopping, setStopping] = useState(false);
   const {
     selectedFolder,
@@ -188,6 +194,17 @@ export function PromptWorkspace(): JSX.Element {
     return window.doni.onAiNetworkEvent((event) => setLastNetworkEvent(event));
   }, []);
 
+  useEffect(() => {
+    if (typeof window.doni.onAiExecutionStream !== "function") return;
+    return window.doni.onAiExecutionStream((event) => {
+      setExecutionStreamSource(event.source);
+      const chunk =
+        event.type === "stderr" ? `[stderr] ${event.data}` : event.data;
+      executionStreamRef.current = `${executionStreamRef.current}${chunk}`;
+      setExecutionStreamText(executionStreamRef.current);
+    });
+  }, []);
+
   const appendChatMessage = (message: Omit<ChatMessage, "id">): void => {
     setChatMessages((current) => [
       ...current,
@@ -196,6 +213,12 @@ export function PromptWorkspace(): JSX.Element {
         id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       },
     ]);
+  };
+
+  const clearExecutionStream = (): void => {
+    executionStreamRef.current = "";
+    setExecutionStreamText("");
+    setExecutionStreamSource(null);
   };
 
   const openProjectFolder = async (): Promise<void> => {
@@ -250,47 +273,6 @@ export function PromptWorkspace(): JSX.Element {
     setOptimizing(true);
     try {
       const settings = await window.doni.getSettings();
-      if (settings.executorProvider === "codex") {
-        const effectiveIntent = buildDirectIntent(trimmedRequest);
-        const effectiveVariant = buildDirectVariant(trimmedRequest);
-        const canWrite = settings.codexSandbox === "workspace-write";
-        const response = await window.doni.runCodexCli({
-          folderPath: selectedFolder,
-          sandbox: settings.codexSandbox,
-          model: settings.executorModel || settings.model,
-          prompt: [
-            "You are being called from Doni, a desktop AI coding companion.",
-            canWrite
-              ? "You may modify files inside the workspace if that is necessary. Keep edits small and summarize every changed file."
-              : "Do not modify files. Analyze the project and return a reviewable plan plus unified diff suggestions if code should change.",
-            canWrite
-              ? "After editing, include verification commands the user should run."
-              : "The user will review/apply changes in Doni, so do not claim that edits were applied.",
-            "",
-            `Yêu cầu gốc:\n${trimmedRequest}`,
-            "",
-            `${requestStyle === "direct" ? "Prompt" : "Chiến lược đã chọn"}:\n${effectiveVariant.title}\n${effectiveVariant.prompt}`,
-          ].join("\n"),
-        });
-        setExecutionResult({
-          content: response.content,
-          createdAt: response.finishedAt,
-        });
-        appendChatMessage({
-          role: "assistant",
-          kind: "answer",
-          content: response.content,
-        });
-        await updateCurrentSession({
-          rawRequest: trimmedRequest,
-          detectedIntent: effectiveIntent,
-          selectedVariant: effectiveVariant,
-          finalPrompt: effectiveVariant.prompt,
-          executionMode: "answer",
-          executionResult: response.content,
-        });
-        return;
-      }
       if (
         !settings.apiBase.trim() ||
         !settings.apiKey.trim() ||
@@ -467,12 +449,55 @@ export function PromptWorkspace(): JSX.Element {
     setPatchError(null);
     clearApplyResult();
     setExecutionResult(null);
+    clearExecutionStream();
     clearPatchPlan();
     setExecutionStartedAt(startedAt);
     setExecutionFinishedAt(null);
 
     try {
       const settings = await window.doni.getSettings();
+      if (settings.executorProvider === "codex") {
+        const canWrite = settings.codexSandbox === "workspace-write";
+        const response = await window.doni.runCodexCli({
+          folderPath: selectedFolder,
+          sandbox: settings.codexSandbox,
+          prompt: [
+            "You are being called from Doni, a desktop AI coding companion.",
+            canWrite
+              ? "You may modify files inside the workspace if that is necessary. Keep edits small and summarize every changed file."
+              : "Do not modify files. Analyze the project and return a reviewable plan plus unified diff suggestions if code should change.",
+            canWrite
+              ? "After editing, include verification commands the user should run."
+              : "The user will review/apply changes in Doni, so do not claim that edits were applied.",
+            "",
+            `Yêu cầu gốc:\n${trimmedRequest}`,
+            "",
+            `${requestStyle === "direct" ? "Prompt" : "Chiến lược đã chọn"}:\n${effectiveVariant.title}\n${effectiveVariant.prompt}`,
+          ].join("\n"),
+        });
+        setExecutionResult({
+          content: response.content,
+          createdAt: response.finishedAt,
+        });
+        appendChatMessage({
+          role: "assistant",
+          kind: "answer",
+          content: response.content,
+        });
+        const codexStream = executionStreamRef.current.trim();
+        const savedExecutionResult = codexStream
+          ? `${codexStream}\n\n--- Final answer ---\n${response.content}`.trim()
+          : response.content;
+        await updateCurrentSession({
+          rawRequest: trimmedRequest,
+          detectedIntent: effectiveIntent,
+          selectedVariant: effectiveVariant,
+          finalPrompt: effectiveVariant.prompt,
+          executionMode: "answer",
+          executionResult: savedExecutionResult,
+        });
+        return;
+      }
       if (
         !settings.apiBase.trim() ||
         !settings.apiKey.trim() ||
@@ -587,6 +612,7 @@ export function PromptWorkspace(): JSX.Element {
     setExecutionLoading(true);
     setExecutionError(null);
     setExecutionResult(null);
+    clearExecutionStream();
     clearPatchPlan();
     setExecutionStartedAt(startedAt);
     setExecutionFinishedAt(null);
@@ -596,7 +622,6 @@ export function PromptWorkspace(): JSX.Element {
       const response = await window.doni.runCodexCli({
         folderPath: selectedFolder,
         sandbox: settings.codexSandbox,
-        model: settings.executorModel || settings.model,
         prompt: [
           "You are being called from Doni, a desktop AI coding companion.",
           canWrite
@@ -615,13 +640,17 @@ export function PromptWorkspace(): JSX.Element {
         content: response.content,
         createdAt: response.finishedAt,
       });
+      const codexStream = executionStreamRef.current.trim();
+      const savedExecutionResult = codexStream
+        ? `${codexStream}\n\n--- Final answer ---\n${response.content}`.trim()
+        : response.content;
       await updateCurrentSession({
         rawRequest: rawRequest.trim(),
         detectedIntent: executionIntent ?? undefined,
         selectedVariant,
         finalPrompt: selectedVariant.prompt,
         executionMode: "answer",
-        executionResult: response.content,
+        executionResult: savedExecutionResult,
       });
     } catch (caughtError) {
       const message =
@@ -937,7 +966,10 @@ export function PromptWorkspace(): JSX.Element {
                     </button>
                     <button
                       type="button"
-                      onClick={clearExecution}
+                      onClick={() => {
+                        clearExecution();
+                        clearExecutionStream();
+                      }}
                       disabled={
                         !executionResult &&
                         !executionError &&
@@ -967,6 +999,18 @@ export function PromptWorkspace(): JSX.Element {
                 {patchError ? (
                   <div className="rounded-2xl border border-ember/30 bg-ember/10 px-4 py-3 text-sm font-medium text-ember">
                     {patchError}
+                  </div>
+                ) : null}
+                {executionStreamText ? (
+                  <div className="overflow-hidden rounded-2xl border border-white/10 bg-ink/80">
+                    <div className="border-b border-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      {executionStreamSource === "codex"
+                        ? "Codex CLI"
+                        : "Executor stream"}
+                    </div>
+                    <pre className="max-h-80 overflow-auto whitespace-pre-wrap p-4 text-xs leading-6 text-slate-200">
+                      {executionStreamText}
+                    </pre>
                   </div>
                 ) : null}
                 {executionLoading ? (
@@ -1016,10 +1060,17 @@ export function PromptWorkspace(): JSX.Element {
                 onChange={(event) => setDraftRequest(event.target.value)}
                 onKeyDown={(event) => {
                   if (
-                    (event.ctrlKey || event.metaKey) &&
-                    event.key === "Enter"
+                    event.key === "Enter" &&
+                    !event.shiftKey &&
+                    !event.nativeEvent.isComposing
                   ) {
                     event.preventDefault();
+                    if (
+                      !(isOptimizing || executionLoading) &&
+                      (!selectedFolder || !composerMessage)
+                    ) {
+                      return;
+                    }
                     void (isOptimizing || executionLoading
                       ? stopActiveRun()
                       : primaryAction());
@@ -1076,7 +1127,7 @@ export function PromptWorkspace(): JSX.Element {
                     (!(isOptimizing || executionLoading) &&
                       (!selectedFolder || !composerMessage))
                   }
-                  className={`grid h-11 w-11 shrink-0 place-items-center rounded-full text-lg font-black text-ink transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                  className={`flex items-center justify-center h-11 w-11 shrink-0 place-items-center rounded-full text-lg font-black text-ink transition disabled:cursor-not-allowed disabled:opacity-40 ${
                     isOptimizing || executionLoading
                       ? "bg-ember hover:bg-ember/90"
                       : executionMode === "patch"

@@ -2,6 +2,10 @@ import type { AiSettings, ExecutePromptRequest, ExecutePromptResponse, PatchFile
 import { createChatCompletionResult } from './aiClient';
 import { buildLanguageInstruction } from './languagePreference';
 
+interface ExecutePromptCallbacks {
+  onStream?: (chunk: string) => void;
+}
+
 const ANSWER_SYSTEM_PROMPT = `You are a senior software engineer working inside an AI coding companion.
 You receive an optimized coding prompt from the user.
 Your job is to answer clearly and practically.
@@ -185,6 +189,7 @@ export async function executePrompt(
   projectContext: ProjectContext,
   settings: AiSettings,
   request: Omit<ExecutePromptRequest, 'finalPrompt' | 'projectContext'>,
+  callbacks: ExecutePromptCallbacks = {},
 ): Promise<ExecutePromptResponse> {
   const trimmedPrompt = finalPrompt.trim();
   if (!trimmedPrompt) {
@@ -209,6 +214,7 @@ export async function executePrompt(
         },
       ],
       90000,
+      callbacks.onStream ? { onContentDelta: callbacks.onStream } : undefined,
     );
     const parsedPlan = parsePatchPlan(result.content);
     const validation = validatePatchAgainstContext(parsedPlan, request.contextFiles);
@@ -222,8 +228,6 @@ export async function executePrompt(
     };
   }
 
-  // TODO: Add streaming support with fetch stream parsing and IPC chunk events.
-  // The request body should set stream: true, then relay delta chunks from main to renderer.
   const result = await createChatCompletionResult(
     { ...settings, model: settings.executorModel || settings.model },
     [
@@ -236,6 +240,7 @@ export async function executePrompt(
       },
     ],
     60000,
+    callbacks.onStream ? { onContentDelta: callbacks.onStream } : undefined,
   );
 
   return {

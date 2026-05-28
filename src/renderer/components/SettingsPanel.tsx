@@ -226,7 +226,7 @@ export function SettingsPanel(): JSX.Element {
         <div className="mt-4 grid gap-3 lg:grid-cols-2">
           <label className="text-sm text-slate-300">
             <span className="font-semibold text-white">
-              Model A lập kế hoạch
+              Model lập kế hoạch
             </span>
             <select
               value={settings.plannerModel}
@@ -242,7 +242,7 @@ export function SettingsPanel(): JSX.Element {
             </select>
           </label>
           <label className="text-sm text-slate-300">
-            <span className="font-semibold text-white">Executor sử dụng</span>
+            <span className="font-semibold text-white">Model chính</span>
             <select
               value={settings.executorProvider}
               onChange={(event) =>
@@ -319,7 +319,7 @@ export function SettingsPanel(): JSX.Element {
             className="mt-3 w-full rounded-xl border border-white/10 bg-ink/70 px-3 py-2 outline-none focus:border-mint/60"
           >
             <option value="inline">Chỉnh sửa ngay trên dòng</option>
-            <option value="split">Giữ và revert</option>
+            <option value="split">Lựa chọn an toàn</option>
           </select>
         </label>
       </div>
@@ -335,7 +335,7 @@ export function SettingsPanel(): JSX.Element {
         <span>Tự sao lưu trước khi áp dụng patch</span>
       </label>
       <label className="mt-3 block rounded-2xl border border-white/10 bg-ink/50 p-4 text-sm text-slate-300">
-        <span className="font-semibold text-white">Mẫu bỏ qua</span>
+        <span className="font-semibold text-white">Git Ignore</span>
         <textarea
           value={settings.ignorePatterns.join("\n")}
           onChange={(event) =>

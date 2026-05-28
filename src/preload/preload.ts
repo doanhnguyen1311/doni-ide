@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
   AiSettings,
+  AiExecutionStreamEvent,
   AiNetworkEvent,
   AnalyzeCommandErrorRequest,
   ApplyPatchRequest,
@@ -47,6 +48,11 @@ const electronApi: ElectronApi = {
     const listener = (_event: Electron.IpcRendererEvent, payload: AiNetworkEvent): void => callback(payload);
     ipcRenderer.on('ai:networkEvent', listener);
     return () => ipcRenderer.removeListener('ai:networkEvent', listener);
+  },
+  onAiExecutionStream: (callback: (event: AiExecutionStreamEvent) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: AiExecutionStreamEvent): void => callback(payload);
+    ipcRenderer.on('ai:executionStream', listener);
+    return () => ipcRenderer.removeListener('ai:executionStream', listener);
   },
   optimizePrompt: (request: OptimizePromptRequest): Promise<OptimizePromptResponse> => ipcRenderer.invoke('optimize-prompt', request),
   executePrompt: (request: ExecutePromptRequest): Promise<ExecutePromptResponse> => ipcRenderer.invoke('ai:executePrompt', request),

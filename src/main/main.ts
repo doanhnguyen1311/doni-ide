@@ -23,6 +23,7 @@ import {
 } from './sessionMemoryService';
 import type {
   AiSettings,
+  AiExecutionStreamEvent,
   AiNetworkEvent,
   AnalyzeCommandErrorRequest,
   ApplyPatchRequest,
@@ -155,12 +156,28 @@ ipcMain.handle('codex:probe', async (_event, request?: ProbeCodexCliRequest): Pr
   }
 });
 
-ipcMain.handle('codex:run', async (_event, request: RunCodexCliRequest): Promise<RunCodexCliResponse> => {
+function createExecutionStreamEvent(
+  source: AiExecutionStreamEvent['source'],
+  type: AiExecutionStreamEvent['type'],
+  data: string,
+): AiExecutionStreamEvent {
+  return {
+    source,
+    type,
+    data,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+ipcMain.handle('codex:run', async (event, request: RunCodexCliRequest): Promise<RunCodexCliResponse> => {
   try {
     if (!selectedProjectFolder || path.resolve(request.folderPath) !== selectedProjectFolder) {
       throw new Error('Open a project folder before running Codex CLI.');
     }
-    return await runCodexCli(request);
+    event.sender.send('ai:executionStream', createExecutionStreamEvent('codex', 'status', 'Starting Codex CLI...\n'));
+    return await runCodexCli(request, {
+      onOutput: (type, data) => event.sender.send('ai:executionStream', createExecutionStreamEvent('codex', type, data)),
+    });
   } catch (error) {
     throw new Error(friendlyError(error));
   }
@@ -265,7 +282,7 @@ ipcMain.handle('optimize-prompt', async (_event, request: OptimizePromptRequest)
   }
 });
 
-ipcMain.handle('ai:executePrompt', async (_event, request: ExecutePromptRequest): Promise<ExecutePromptResponse> => {
+ipcMain.handle('ai:executePrompt', async (event, request: ExecutePromptRequest): Promise<ExecutePromptResponse> => {
   try {
     if (!request.selectedVariant) {
       throw new Error('Select a strategy first.');
@@ -275,13 +292,22 @@ ipcMain.handle('ai:executePrompt', async (_event, request: ExecutePromptRequest)
     }
     const settings = await getAiSettings();
     validateAiSettings(settings);
-    return await executePrompt(request.finalPrompt, request.projectContext, settings, {
-      rawRequest: request.rawRequest,
-      selectedVariant: request.selectedVariant,
-      detectedIntent: request.detectedIntent,
-      contextFiles: request.contextFiles,
-      executionMode: request.executionMode,
-    });
+    event.sender.send('ai:executionStream', createExecutionStreamEvent('api', 'status', 'Starting executor stream...\n'));
+    return await executePrompt(
+      request.finalPrompt,
+      request.projectContext,
+      settings,
+      {
+        rawRequest: request.rawRequest,
+        selectedVariant: request.selectedVariant,
+        detectedIntent: request.detectedIntent,
+        contextFiles: request.contextFiles,
+        executionMode: request.executionMode,
+      },
+      {
+        onStream: (chunk) => event.sender.send('ai:executionStream', createExecutionStreamEvent('api', 'content', chunk)),
+      },
+    );
   } catch (error) {
     throw new Error(friendlyError(error));
   }

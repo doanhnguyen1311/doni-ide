@@ -27,6 +27,10 @@ export interface ChatCompletionResult {
   usage?: unknown;
 }
 
+interface ChatCompletionOptions {
+  onContentDelta?: (chunk: string) => void;
+}
+
 const MAX_NETWORK_EVENTS = 100;
 const networkEvents: AiNetworkEvent[] = [];
 const activeControllers = new Set<AbortController>();
@@ -103,6 +107,74 @@ function parseChatCompletionBody(text: string, status: number): ChatCompletionRe
   return { content, usage };
 }
 
+async function readStreamingCompletionBody(
+  response: Response,
+  status: number,
+  onContentDelta: (chunk: string) => void,
+): Promise<ChatCompletionResult & { responseBytes: number }> {
+  if (!response.body) {
+    const text = await response.text();
+    const result = parseChatCompletionBody(text, status);
+    onContentDelta(result.content);
+    return { ...result, responseBytes: Buffer.byteLength(text, 'utf8') };
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let content = '';
+  let usage: unknown;
+  let parsedAnyEvent = false;
+  let responseBytes = 0;
+
+  const readPayload = (payload: string): void => {
+    const trimmed = payload.trim();
+    if (!trimmed || trimmed === '[DONE]') return;
+    try {
+      const json = JSON.parse(trimmed) as ChatCompletionResponse;
+      parsedAnyEvent = true;
+      const delta = readCompletionContent(json);
+      if (delta) {
+        content += delta;
+        onContentDelta(delta);
+      }
+      usage = json.usage ?? usage;
+    } catch {
+      throw new AiApiError('AI API trả về phản hồi stream không phải JSON.', status);
+    }
+  };
+
+  const drainLines = (isFinal = false): void => {
+    const lines = buffer.split(/\r?\n/);
+    buffer = isFinal ? '' : (lines.pop() ?? '');
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      readPayload(line.startsWith('data:') ? line.slice(5) : line);
+    }
+    if (isFinal && buffer.trim()) {
+      readPayload(buffer.startsWith('data:') ? buffer.slice(5) : buffer);
+      buffer = '';
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    responseBytes += value.byteLength;
+    buffer += decoder.decode(value, { stream: true });
+    drainLines();
+  }
+  buffer += decoder.decode();
+  drainLines(true);
+
+  if (!parsedAnyEvent || !content) {
+    throw new AiApiError('AI API trả về phản hồi stream rỗng.', status);
+  }
+
+  return { content, usage, responseBytes };
+}
+
 function readHttpErrorDetail(text: string, contentType: string | null, fallback: string): string {
   const trimmed = text.trim();
   if (!trimmed) return fallback;
@@ -118,7 +190,12 @@ function readHttpErrorDetail(text: string, contentType: string | null, fallback:
   }
 }
 
-export async function createChatCompletionResult(settings: AiSettings, messages: ChatMessage[], timeoutMs = 30000): Promise<ChatCompletionResult> {
+export async function createChatCompletionResult(
+  settings: AiSettings,
+  messages: ChatMessage[],
+  timeoutMs = 30000,
+  options: ChatCompletionOptions = {},
+): Promise<ChatCompletionResult> {
   validateAiSettings(settings);
   if (/[^\x20-\x7E]/.test(settings.apiKey)) {
     throw new AiApiError('Khóa API chứa ký tự không được hỗ trợ. Hãy dùng khóa ASCII như "test" cho gateway cục bộ tương thích OpenAI.');
@@ -128,7 +205,7 @@ export async function createChatCompletionResult(settings: AiSettings, messages:
   activeControllers.add(controller);
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const url = `${settings.apiBase.replace(/\/$/, '')}/chat/completions`;
-  const body = JSON.stringify({ model: settings.model, messages, temperature: 0.4 });
+  const body = JSON.stringify({ model: settings.model, messages, temperature: 0.4, stream: Boolean(options.onContentDelta) });
   const startedAtMs = Date.now();
   const baseEvent = {
     id: crypto.randomUUID(),
@@ -150,6 +227,38 @@ export async function createChatCompletionResult(settings: AiSettings, messages:
       signal: controller.signal,
     });
 
+    if (!response.ok) {
+      const text = await response.text();
+      const finishedAtMs = Date.now();
+      rememberNetworkEvent({
+        ...baseEvent,
+        finishedAt: new Date(finishedAtMs).toISOString(),
+        status: response.status,
+        ok: response.ok,
+        durationMs: finishedAtMs - startedAtMs,
+        responseBytes: Buffer.byteLength(text, 'utf8'),
+      });
+      const detail = readHttpErrorDetail(text, response.headers.get('content-type'), response.statusText);
+      if (response.status === 401 || response.status === 403) {
+        throw new AiApiError('Khóa API không hợp lệ hoặc request AI API chưa được cấp quyền.', response.status);
+      }
+      throw new AiApiError(`AI API error: ${detail}`, response.status);
+    }
+
+    if (options.onContentDelta) {
+      const result = await readStreamingCompletionBody(response, response.status, options.onContentDelta);
+      const finishedAtMs = Date.now();
+      rememberNetworkEvent({
+        ...baseEvent,
+        finishedAt: new Date(finishedAtMs).toISOString(),
+        status: response.status,
+        ok: response.ok,
+        durationMs: finishedAtMs - startedAtMs,
+        responseBytes: result.responseBytes,
+      });
+      return { content: result.content, usage: result.usage };
+    }
+
     const text = await response.text();
     const finishedAtMs = Date.now();
     rememberNetworkEvent({
@@ -160,14 +269,6 @@ export async function createChatCompletionResult(settings: AiSettings, messages:
       durationMs: finishedAtMs - startedAtMs,
       responseBytes: Buffer.byteLength(text, 'utf8'),
     });
-
-    if (!response.ok) {
-      const detail = readHttpErrorDetail(text, response.headers.get('content-type'), response.statusText);
-      if (response.status === 401 || response.status === 403) {
-        throw new AiApiError('Khóa API không hợp lệ hoặc request AI API chưa được cấp quyền.', response.status);
-      }
-      throw new AiApiError(`AI API error: ${detail}`, response.status);
-    }
 
     return parseChatCompletionBody(text, response.status);
   } catch (error) {

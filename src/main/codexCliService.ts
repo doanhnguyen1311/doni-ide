@@ -54,6 +54,10 @@ interface CodexCommand {
   source: string;
 }
 
+interface CodexRunCallbacks {
+  onOutput?: (type: 'stdout' | 'stderr', data: string) => void;
+}
+
 async function resolveCodexCommand(): Promise<CodexCommand> {
   const command = process.platform === 'win32' ? 'where' : 'which';
   const { stdout } = await execFileAsync(command, ['codex']);
@@ -280,7 +284,15 @@ function collectUsageSignals(text: string): string | undefined {
   return signals.length ? Array.from(new Set(signals)).slice(0, 8).join(' | ') : undefined;
 }
 
-export async function runCodexCli(request: RunCodexCliRequest): Promise<RunCodexCliResponse> {
+function cleanCodexStderr(stderr: string): string {
+  return stderr
+    .split(/\r?\n/)
+    .filter((line) => line.trim() !== 'Reading additional input from stdin...')
+    .join('\n')
+    .trim();
+}
+
+export async function runCodexCli(request: RunCodexCliRequest, callbacks: CodexRunCallbacks = {}): Promise<RunCodexCliResponse> {
   const cwd = await validateFolder(request.folderPath);
   const prompt = request.prompt.trim();
   if (!prompt) {
@@ -306,7 +318,7 @@ export async function runCodexCli(request: RunCodexCliRequest): Promise<RunCodex
     args.push('-m', request.model.trim());
   }
 
-  args.push(prompt);
+  args.push('-');
   const resolvedCommand = await resolveCodexCommand();
 
   return await new Promise<RunCodexCliResponse>((resolve, reject) => {
@@ -314,7 +326,7 @@ export async function runCodexCli(request: RunCodexCliRequest): Promise<RunCodex
       cwd,
       windowsHide: true,
       env: process.env,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
     activeCodexChildren.add(child);
     let stdout = '';
@@ -330,11 +342,24 @@ export async function runCodexCli(request: RunCodexCliRequest): Promise<RunCodex
     }, CODEX_TIMEOUT_MS);
 
     child.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString();
+      const data = chunk.toString();
+      stdout += data;
+      callbacks.onOutput?.('stdout', data);
     });
     child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
+      const data = chunk.toString();
+      stderr += data;
+      callbacks.onOutput?.('stderr', data);
     });
+    child.stdin.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      activeCodexChildren.delete(child);
+      child.kill();
+      reject(error);
+    });
+    child.stdin.end(prompt);
     child.on('error', (error) => {
       if (settled) return;
       settled = true;
@@ -384,13 +409,13 @@ export async function runCodexCli(request: RunCodexCliRequest): Promise<RunCodex
         usageSummary,
       };
       if (exitCode !== 0) {
-        reject(new Error(stderr.trim() || stdout.trim() || `Codex CLI exited with code ${exitCode}.`));
+        reject(new Error(cleanCodexStderr(stderr) || stdout.trim() || `Codex CLI exited with code ${exitCode}.`));
         return;
       }
       resolve({
         content: content.trim(),
         stdout,
-        stderr,
+        stderr: cleanCodexStderr(stderr),
         exitCode,
         startedAt,
         finishedAt,

@@ -367,6 +367,13 @@ export interface AiNetworkEvent {
   error?: string;
 }
 
+export interface AiExecutionStreamEvent {
+  source: 'api' | 'codex';
+  type: 'content' | 'stdout' | 'stderr' | 'status';
+  data: string;
+  timestamp: string;
+}
+
 export interface ElectronApi {
   openProjectFolder: () => Promise<FolderPickerResult>;
   getSettings: () => Promise<AiSettings>;
@@ -376,6 +383,7 @@ export interface ElectronApi {
   clearAiNetworkEvents: () => Promise<void>;
   cancelActiveAi: () => Promise<void>;
   onAiNetworkEvent: (callback: (event: AiNetworkEvent) => void) => () => void;
+  onAiExecutionStream: (callback: (event: AiExecutionStreamEvent) => void) => () => void;
   optimizePrompt: (request: OptimizePromptRequest) => Promise<OptimizePromptResponse>;
   executePrompt: (request: ExecutePromptRequest) => Promise<ExecutePromptResponse>;
   readProjectFiles: (request: ReadProjectFilesRequest) => Promise<ReadProjectFilesResponse>;

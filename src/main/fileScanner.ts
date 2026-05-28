@@ -77,9 +77,25 @@ function detectProjectSummary(files: ProjectFile[]): ProjectSummary {
 export async function scanProject(folderPath: string): Promise<ScanProjectResult> {
   const files: ProjectFile[] = [];
   let limitReached = false;
+  const projectRoot = path.resolve(folderPath);
+  const projectRootRealPath = await fs.realpath(projectRoot);
+
+  function isInsideProject(realPath: string): boolean {
+    return realPath === projectRootRealPath || realPath.startsWith(`${projectRootRealPath}${path.sep}`);
+  }
 
   async function walk(currentPath: string): Promise<void> {
     if (limitReached) {
+      return;
+    }
+
+    let currentRealPath;
+    try {
+      currentRealPath = await fs.realpath(currentPath);
+    } catch {
+      return;
+    }
+    if (!isInsideProject(currentRealPath)) {
       return;
     }
 
@@ -97,6 +113,10 @@ export async function scanProject(folderPath: string): Promise<ScanProjectResult
 
       const absolutePath = path.join(currentPath, entry.name);
 
+      if (entry.isSymbolicLink()) {
+        continue;
+      }
+
       if (entry.isDirectory()) {
         if (!IGNORED_DIRS.has(entry.name)) {
           await walk(absolutePath);
@@ -113,13 +133,26 @@ export async function scanProject(folderPath: string): Promise<ScanProjectResult
         continue;
       }
 
-      const stat = await fs.stat(absolutePath);
+      let stat;
+      try {
+        stat = await fs.lstat(absolutePath);
+      } catch {
+        continue;
+      }
+      if (!stat.isFile()) {
+        continue;
+      }
       if (stat.size > MAX_FILE_SIZE_BYTES) {
         continue;
       }
 
+      const fileRealPath = await fs.realpath(absolutePath).catch(() => null);
+      if (!fileRealPath || !isInsideProject(fileRealPath)) {
+        continue;
+      }
+
       files.push({
-        relativePath: path.relative(folderPath, absolutePath),
+        relativePath: path.relative(projectRoot, absolutePath),
         absolutePath,
         extension,
         size: stat.size,

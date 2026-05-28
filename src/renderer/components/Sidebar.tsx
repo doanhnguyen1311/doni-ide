@@ -73,12 +73,15 @@ function TreeItem({ node, depth, selectedFolder }: { node: TreeNode; depth: numb
 }
 
 export function Sidebar({ width, selectedFolder, fileCount, files, projectSummary, activeView, onOpenWorkspace, onOpenSettings }: SidebarProps): JSX.Element {
+  const [refreshingTree, setRefreshingTree] = useState(false);
+  const [refreshTreeError, setRefreshTreeError] = useState<string | null>(null);
   const tree = useMemo(() => buildTree(files), [files]);
   const rootChildren = Array.from(tree.children.values()).sort((a, b) => Number(Boolean(a.file)) - Number(Boolean(b.file)) || a.name.localeCompare(b.name));
   const codexStatus = useProjectStore((state) => state.codexStatus);
   const codexStatusLoading = useProjectStore((state) => state.codexStatusLoading);
   const refreshCodexStatus = useProjectStore((state) => state.refreshCodexStatus);
   const probeCodexStatus = useProjectStore((state) => state.probeCodexStatus);
+  const refreshProjectScan = useProjectStore((state) => state.refreshProjectScan);
   const hasRemainingPercent = typeof codexStatus?.remainingPercent === 'number';
   const hasWeeklyRemainingPercent = typeof codexStatus?.weeklyRemainingPercent === 'number';
   const tokenText = typeof codexStatus?.totalTokens === 'number' ? codexStatus.totalTokens.toLocaleString() : null;
@@ -89,6 +92,23 @@ export function Sidebar({ width, selectedFolder, fileCount, files, projectSummar
     const interval = window.setInterval(() => void refreshCodexStatus(), 15000);
     return () => window.clearInterval(interval);
   }, [refreshCodexStatus]);
+
+  const refreshProjectTree = async (): Promise<void> => {
+    if (!selectedFolder) return;
+    setRefreshingTree(true);
+    setRefreshTreeError(null);
+    try {
+      await refreshProjectScan(selectedFolder);
+    } catch (error) {
+      setRefreshTreeError(
+        error instanceof Error
+          ? error.message.replace(/^Error invoking remote method 'project:scan-folder': Error: /, '')
+          : 'Không thể làm mới cây thư mục.',
+      );
+    } finally {
+      setRefreshingTree(false);
+    }
+  };
 
   return (
     <aside className="flex h-full shrink-0 flex-col border-r border-white/10 bg-panel/95" style={{ width }}>
@@ -195,7 +215,22 @@ export function Sidebar({ width, selectedFolder, fileCount, files, projectSummar
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        <div className="mb-2 px-2 text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Cây thư mục</div>
+        <div className="mb-2 flex items-center justify-between gap-2 px-2">
+          <div className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Cây thư mục</div>
+          <button
+            type="button"
+            onClick={() => void refreshProjectTree()}
+            disabled={!selectedFolder || refreshingTree}
+            className="rounded-full border border-white/10 px-2 py-1 text-[11px] font-bold text-slate-300 transition hover:border-skyglass/50 hover:text-skyglass disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {refreshingTree ? '...' : 'Làm mới'}
+          </button>
+        </div>
+        {refreshTreeError ? (
+          <div className="mb-2 rounded-lg border border-ember/30 bg-ember/10 px-2 py-1.5 text-xs text-ember">
+            {refreshTreeError}
+          </div>
+        ) : null}
         {rootChildren.length ? rootChildren.map((node) => <TreeItem key={node.path} node={node} depth={0} selectedFolder={selectedFolder} />) : (
           <div className="rounded-2xl border border-dashed border-white/10 p-4 text-sm leading-6 text-slate-500">Mở thư mục dự án để quét tệp.</div>
         )}

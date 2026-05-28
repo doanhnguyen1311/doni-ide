@@ -689,6 +689,7 @@ export function PromptWorkspace(): JSX.Element {
               "Edit No Plan đang dùng Codex nhưng sandbox đang là read-only, nên Codex không được phép sửa file. Hãy chuyển Codex sandbox sang workspace-write trong Settings, hoặc đổi Executor Provider sang Custom để tạo patch preview rồi bấm Apply.",
             );
           }
+          setProcessingStage("editing");
           const response = await window.doni.runCodexCli({
             folderPath: selectedFolder,
             sandbox: "workspace-write",
@@ -780,6 +781,7 @@ export function PromptWorkspace(): JSX.Element {
               effectiveVariant,
             )
           : loadedContextFiles;
+      setProcessingStage("editing");
       const result = await window.doni.executePrompt({
         rawRequest: trimmedRequest,
         finalPrompt: effectiveVariant.prompt,
@@ -869,6 +871,9 @@ export function PromptWorkspace(): JSX.Element {
     } finally {
       setExecutionLoading(false);
       setPatchLoading(false);
+      if (selectedFolder) {
+        await refreshProjectScan(selectedFolder).catch(() => undefined);
+      }
       setProcessingStage("idle");
       setExecutionFinishedAt(new Date().toISOString());
     }
@@ -962,6 +967,9 @@ export function PromptWorkspace(): JSX.Element {
       );
     } finally {
       setExecutionLoading(false);
+      if (selectedFolder) {
+        await refreshProjectScan(selectedFolder).catch(() => undefined);
+      }
       setProcessingStage("idle");
       setExecutionFinishedAt(new Date().toISOString());
       await refreshCodexStatus();
@@ -1063,6 +1071,7 @@ export function PromptWorkspace(): JSX.Element {
     setSubmittedMessage(message);
     setRawRequest(message);
     setDraftRequest("");
+    setDroppedComposerFiles([]);
     setLastNetworkEvent(null);
     if (shouldAppendUserMessage) {
       appendChatMessage({ role: "user", content: message });

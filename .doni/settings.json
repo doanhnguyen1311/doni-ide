@@ -1,8 +1,0 @@
-{
-  "ignoredFolders": [
-    "node_modules",
-    ".git",
-    "dist",
-    "build"
-  ]
-}

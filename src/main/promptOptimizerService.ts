@@ -1,18 +1,21 @@
 import path from 'node:path';
 import type { AiSettings, OptimizePromptRequest, OptimizePromptResponse, ProjectContextSummary, ProjectFile, PromptVariant } from '../shared/types';
 import { createChatCompletion } from './aiClient';
+import { buildLanguageInstruction } from './languagePreference';
 
-const SYSTEM_PROMPT = `You are a prompt optimization engine for an AI coding companion.
-Your job is to transform a raw user request into 3 clear coding prompt variants.
+const SYSTEM_PROMPT = `You are Model A, the fast planner for Doni, a desktop AI coding companion that works alongside VS Code.
+Your job is to analyze a raw coding request and prepare execution for a stronger Model B.
 
 Rules:
 - Understand the user's intent.
 - Do not solve the task yet.
 - Do not write code changes yet.
-- Generate 3 different prompt strategies.
-- Each variant must be useful for a coding AI.
-- Keep prompts actionable, specific, and safe.
+- Generate a refined prompt, one execution plan, a task breakdown, implementation suggestions, and exactly 3 execution strategies: Quick Fix, Safe Refactor, Deep Improve.
+- Each strategy must be useful for a coding executor AI.
+- Keep prompts and plans actionable, specific, and safe.
 - Preserve user constraints.
+- Require diff review and user confirmation before file changes.
+- Match the user's language for every user-facing string you generate.
 - If the request is unclear, still create best-effort variants.
 - Output JSON only.
 
@@ -24,24 +27,40 @@ Return JSON format:
     "riskLevel": "low | medium | high",
     "needsProjectContext": true
   },
+  "refinedPrompt": "clear finalized prompt Model B can execute",
+  "executionPlan": ["step 1", "step 2"],
+  "taskBreakdown": ["subtask 1", "subtask 2"],
+  "implementationSuggestions": ["suggestion 1", "suggestion 2"],
   "variants": [
     {
-      "id": "safe-fix",
-      "title": "Safe Fix",
-      "description": "Minimal changes, preserve existing logic.",
-      "prompt": "..."
+      "id": "quick-fix",
+      "title": "Quick Fix",
+      "description": "Smallest targeted change with minimal touched files.",
+      "prompt": "...",
+      "plan": ["step 1", "step 2"],
+      "tradeoffs": ["tradeoff 1"],
+      "suggestedFiles": ["src/example.ts"],
+      "estimatedRisk": "low"
     },
     {
-      "id": "deep-refactor",
-      "title": "Deep Refactor",
-      "description": "Improve structure and maintainability.",
-      "prompt": "..."
+      "id": "safe-refactor",
+      "title": "Safe Refactor",
+      "description": "Conservative refactor with behavior preserved.",
+      "prompt": "...",
+      "plan": ["step 1", "step 2"],
+      "tradeoffs": ["tradeoff 1"],
+      "suggestedFiles": [],
+      "estimatedRisk": "medium"
     },
     {
-      "id": "targeted-debug",
-      "title": "Targeted Debug",
-      "description": "Focus on finding the root cause first.",
-      "prompt": "..."
+      "id": "deep-improve",
+      "title": "Deep Improve",
+      "description": "Broader improvement for UI/UX, architecture, or maintainability.",
+      "prompt": "...",
+      "plan": ["step 1", "step 2"],
+      "tradeoffs": ["tradeoff 1"],
+      "suggestedFiles": [],
+      "estimatedRisk": "low"
     }
   ]
 }`;
@@ -70,13 +89,25 @@ function extractJson(content: string): string {
 
 function validateResponse(value: unknown): OptimizePromptResponse {
   const response = value as OptimizePromptResponse;
-  if (!response?.detectedIntent || !Array.isArray(response.variants) || response.variants.length !== 3) {
-    throw new Error('Invalid JSON response from AI. Expected detectedIntent and exactly 3 variants.');
+  if (
+    !response?.detectedIntent ||
+    typeof response.refinedPrompt !== 'string' ||
+    !Array.isArray(response.executionPlan) ||
+    !Array.isArray(response.taskBreakdown) ||
+    !Array.isArray(response.implementationSuggestions) ||
+    !Array.isArray(response.variants) ||
+    response.variants.length !== 3
+  ) {
+    throw new Error('Invalid JSON response from AI. Expected planner output and exactly 3 strategies.');
   }
   response.variants.forEach((variant: PromptVariant) => {
     if (!variant.id || !variant.title || !variant.description || !variant.prompt) {
-      throw new Error('Invalid JSON response from AI. A prompt variant is missing required fields.');
+      throw new Error('Invalid JSON response from AI. A strategy is missing required fields.');
     }
+    variant.plan = Array.isArray(variant.plan) ? variant.plan.filter((item): item is string => typeof item === 'string') : [];
+    variant.tradeoffs = Array.isArray(variant.tradeoffs) ? variant.tradeoffs.filter((item): item is string => typeof item === 'string') : [];
+    variant.suggestedFiles = Array.isArray(variant.suggestedFiles) ? variant.suggestedFiles.filter((item): item is string => typeof item === 'string') : [];
+    variant.estimatedRisk = variant.estimatedRisk === 'medium' || variant.estimatedRisk === 'high' ? variant.estimatedRisk : 'low';
   });
   return response;
 }
@@ -86,13 +117,15 @@ export async function optimizePrompt(request: OptimizePromptRequest, settings: A
     {
       rawRequest: request.rawRequest,
       projectContext: request.projectContext,
-      instruction: 'Return only valid JSON matching the required schema. Do not include markdown fences.',
+      languageInstruction: buildLanguageInstruction(request.rawRequest),
+      instruction: 'Return only valid JSON matching the required schema. Do not include markdown fences. Use the detected user language for detectedIntent.summary, variant titles, descriptions, and prompts.',
     },
     null,
     2,
   );
 
-  const content = await createChatCompletion(settings, [
+  const plannerSettings = { ...settings, model: settings.plannerModel || settings.model };
+  const content = await createChatCompletion(plannerSettings, [
     { role: 'system', content: SYSTEM_PROMPT },
     { role: 'user', content: userContent },
   ]);

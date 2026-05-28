@@ -1,5 +1,6 @@
 import type { AiSettings, AnalyzeCommandErrorRequest, ErrorAnalysisResult, ProjectContextFile } from '../shared/types';
 import { createChatCompletion } from './aiClient';
+import { buildLanguageInstruction } from './languagePreference';
 
 const MAX_OUTPUT_BYTES = 40 * 1024;
 const HEAD_BYTES = 10 * 1024;
@@ -16,6 +17,7 @@ Your job:
 - Do not generate a patch yet.
 - Do not invent file contents.
 - If context is insufficient, say exactly what files/logs are needed.
+- Match the user's language for every user-facing JSON field.
 
 Return JSON only:
 {
@@ -98,6 +100,7 @@ export async function analyzeCommandError(request: AnalyzeCommandErrorRequest, s
       exitCode: request.exitCode,
       terminalOutput: truncated.output,
       terminalOutputTruncated: truncated.truncated,
+      languageInstruction: buildLanguageInstruction(request.rawRequest || request.command),
       projectContext: {
         folderName: request.projectContext.folderName,
         fileCount: request.projectContext.fileCount,
@@ -107,7 +110,7 @@ export async function analyzeCommandError(request: AnalyzeCommandErrorRequest, s
       rawRequest: request.rawRequest,
       detectedIntent: request.detectedIntent,
       selectedPromptVariant: request.selectedVariant,
-      instruction: 'Return only valid JSON matching the required schema. Do not include markdown fences.',
+      instruction: 'Return only valid JSON matching the required schema. Do not include markdown fences. Follow languageInstruction for summary, probableCauses, suggestedNextActions, and suggestedPrompt.',
     },
     null,
     2,
@@ -115,7 +118,7 @@ export async function analyzeCommandError(request: AnalyzeCommandErrorRequest, s
 
   const loadedContext = formatLoadedContextFiles(request.loadedContextFiles);
   const content = await createChatCompletion(
-    settings,
+    { ...settings, model: settings.plannerModel || settings.model },
     [
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: `${userContent}${loadedContext ? `\n\nLoaded context files:\n${loadedContext}` : ''}` },

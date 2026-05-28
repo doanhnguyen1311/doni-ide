@@ -1,25 +1,27 @@
 import { app } from 'electron';
+import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import type { ProjectMemoryInfo, SessionItem } from '../shared/types';
 
 const MAX_OUTPUT_PREVIEW_BYTES = 20 * 1024;
+const execFileAsync = promisify(execFile);
 
-function sessionsRoot(): string {
-  return path.join(app.getPath('userData'), 'sessions');
-}
+const projectMemoryDirs = new Map<string, string>();
+const DONI_SUBDIRS = ['chats', 'tasks', 'prompts', 'patches', 'cache', 'embeddings', 'logs', 'sessions', 'workspace'];
 
 function projectIdFromPath(projectPath: string): string {
   return crypto.createHash('sha256').update(path.resolve(projectPath)).digest('hex').slice(0, 16);
 }
 
 function projectDir(projectId: string): string {
-  return path.join(sessionsRoot(), projectId);
+  return projectMemoryDirs.get(projectId) ?? path.join(app.getPath('userData'), 'sessions', projectId);
 }
 
 function sessionsPath(projectId: string): string {
-  return path.join(projectDir(projectId), 'sessions.json');
+  return path.join(projectDir(projectId), 'sessions', 'sessions.json');
 }
 
 function projectPath(projectId: string): string {
@@ -28,6 +30,20 @@ function projectPath(projectId: string): string {
 
 async function ensureProjectDir(projectId: string): Promise<void> {
   await fs.mkdir(projectDir(projectId), { recursive: true });
+  await fs.mkdir(path.dirname(sessionsPath(projectId)), { recursive: true });
+}
+
+async function ensureDoniWorkspace(projectPath: string): Promise<string> {
+  const doniPath = path.join(projectPath, '.doni');
+  await fs.mkdir(doniPath, { recursive: true });
+  if (process.platform === 'win32') {
+    await execFileAsync('attrib', ['+h', doniPath]).catch(() => undefined);
+  }
+  await Promise.all(DONI_SUBDIRS.map((dir) => fs.mkdir(path.join(doniPath, dir), { recursive: true })));
+  await fs.writeFile(path.join(doniPath, 'database.sqlite'), '', { flag: 'a' });
+  await fs.writeFile(path.join(doniPath, 'settings.json'), JSON.stringify({ ignoredFolders: ['node_modules', '.git', 'dist', 'build'] }, null, 2), { flag: 'wx' }).catch(() => undefined);
+  await fs.writeFile(path.join(doniPath, 'models.json'), JSON.stringify({ plannerModel: '', executorModel: '' }, null, 2), { flag: 'wx' }).catch(() => undefined);
+  return doniPath;
 }
 
 async function readSessions(projectId: string): Promise<SessionItem[]> {
@@ -84,6 +100,8 @@ export async function createOrUpdateProjectMemory(input: {
 }): Promise<ProjectMemoryInfo> {
   const resolvedPath = path.resolve(input.projectPath);
   const projectId = projectIdFromPath(resolvedPath);
+  const doniPath = await ensureDoniWorkspace(resolvedPath);
+  projectMemoryDirs.set(projectId, doniPath);
   await ensureProjectDir(projectId);
   const now = new Date().toISOString();
   let createdAt = now;
@@ -98,6 +116,7 @@ export async function createOrUpdateProjectMemory(input: {
     projectId,
     projectPath: resolvedPath,
     projectName: path.basename(resolvedPath),
+    doniPath,
     lastOpenedAt: now,
     createdAt,
     fileCount: input.fileCount,

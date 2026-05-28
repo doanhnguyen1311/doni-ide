@@ -9,6 +9,16 @@ export interface ScanProjectResult {
   folderPath: string;
   files: ProjectFile[];
   limitReached: boolean;
+  summary: ProjectSummary;
+}
+
+export interface ProjectSummary {
+  technologies: string[];
+  frameworks: string[];
+  entryPoints: string[];
+  importantFiles: string[];
+  structure: string[];
+  runFlow: string[];
 }
 
 export interface FolderPickerResult {
@@ -24,6 +34,10 @@ export interface PromptVariant {
   title: string;
   description: string;
   prompt: string;
+  plan: string[];
+  tradeoffs: string[];
+  suggestedFiles: string[];
+  estimatedRisk: 'low' | 'medium' | 'high';
 }
 
 export interface DetectedIntent {
@@ -35,6 +49,10 @@ export interface DetectedIntent {
 
 export interface OptimizePromptResponse {
   detectedIntent: DetectedIntent;
+  refinedPrompt: string;
+  executionPlan: string[];
+  taskBreakdown: string[];
+  implementationSuggestions: string[];
   variants: PromptVariant[];
 }
 
@@ -64,6 +82,60 @@ export interface ReadProjectFilesRequest {
 
 export interface ReadProjectFilesResponse {
   files: ProjectContextFile[];
+}
+
+export interface OpenInEditorRequest {
+  folderPath: string;
+  relativePath?: string;
+}
+
+export interface CodexCliStatus {
+  available: boolean;
+  version?: string;
+  source?: string;
+  remainingPercent?: number | null;
+  remainingSource?: string;
+  weeklyRemainingPercent?: number | null;
+  weeklyRemainingSource?: string;
+  fiveHourResetAt?: string;
+  weeklyResetAt?: string;
+  usedPercent?: number | null;
+  usedSource?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedInputTokens?: number;
+  reasoningOutputTokens?: number;
+  totalTokens?: number;
+  contextWindowTokens?: number;
+  lastModel?: string;
+  lastRunAt?: string;
+  lastExitCode?: number | null;
+  lastDurationMs?: number;
+  promptCount?: number;
+  authenticated?: boolean;
+  lastProbeAt?: string;
+  usageSummary?: string;
+  error?: string;
+}
+
+export interface ProbeCodexCliRequest {
+  folderPath?: string;
+}
+
+export interface RunCodexCliRequest {
+  folderPath: string;
+  prompt: string;
+  model?: string;
+  sandbox?: 'read-only' | 'workspace-write';
+}
+
+export interface RunCodexCliResponse {
+  content: string;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  startedAt: string;
+  finishedAt: string;
 }
 
 export interface OptimizePromptRequest {
@@ -176,6 +248,7 @@ export interface ProjectMemoryInfo {
   projectId: string;
   projectPath: string;
   projectName: string;
+  doniPath: string;
   lastOpenedAt: string;
   createdAt: string;
   fileCount: number;
@@ -204,6 +277,10 @@ export interface SessionItem {
   title: string;
   rawRequest: string;
   detectedIntent?: DetectedIntent | null;
+  refinedPrompt?: string;
+  executionPlan?: string[];
+  taskBreakdown?: string[];
+  implementationSuggestions?: string[];
   promptVariants?: PromptVariant[];
   selectedVariant?: PromptVariant | null;
   finalPrompt?: string;
@@ -264,6 +341,13 @@ export interface AiSettings {
   apiBase: string;
   apiKey: string;
   model: string;
+  plannerModel: string;
+  executorModel: string;
+  maxContextFiles: number;
+  ignorePatterns: string[];
+  autoBackup: boolean;
+  diffMode: 'inline' | 'split';
+  codexSandbox: 'read-only' | 'workspace-write';
 }
 
 export interface AiNetworkEvent {
@@ -292,6 +376,10 @@ export interface ElectronApi {
   optimizePrompt: (request: OptimizePromptRequest) => Promise<OptimizePromptResponse>;
   executePrompt: (request: ExecutePromptRequest) => Promise<ExecutePromptResponse>;
   readProjectFiles: (request: ReadProjectFilesRequest) => Promise<ReadProjectFilesResponse>;
+  openInVSCode: (request: OpenInEditorRequest) => Promise<void>;
+  getCodexCliStatus: () => Promise<CodexCliStatus>;
+  probeCodexCliStatus: (request?: ProbeCodexCliRequest) => Promise<CodexCliStatus>;
+  runCodexCli: (request: RunCodexCliRequest) => Promise<RunCodexCliResponse>;
   applyPatch: (request: ApplyPatchRequest) => Promise<ApplyPatchResponse>;
   rollbackPatch: (request: RollbackPatchRequest) => Promise<RollbackPatchResponse>;
   runProjectCommand: (request: RunCommandRequest) => Promise<RunCommandResponse>;

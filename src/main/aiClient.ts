@@ -1,4 +1,4 @@
-import { BrowserWindow } from 'electron';
+﻿import { BrowserWindow } from 'electron';
 import crypto from 'node:crypto';
 import type { AiSettings } from '../shared/types';
 import { validateAiSettings } from './aiSettingsService';
@@ -55,7 +55,7 @@ function readCompletionContent(json: ChatCompletionResponse): string {
 function parseChatCompletionBody(text: string, status: number): ChatCompletionResult {
   const trimmed = text.trim();
   if (!trimmed) {
-    throw new AiApiError('AI API returned an empty response.', status);
+    throw new AiApiError('AI API trả về phản hồi rỗng.', status);
   }
 
   const jsonCandidate = trimmed.replace(/\s*data:\s*\[DONE\]\s*$/i, '');
@@ -64,7 +64,7 @@ function parseChatCompletionBody(text: string, status: number): ChatCompletionRe
     const json = JSON.parse(jsonCandidate) as ChatCompletionResponse;
     const content = readCompletionContent(json);
     if (!content) {
-      throw new AiApiError('AI API returned an empty response.', status);
+      throw new AiApiError('AI API trả về phản hồi rỗng.', status);
     }
     return { content, usage: json.usage };
   } catch (error) {
@@ -88,15 +88,15 @@ function parseChatCompletionBody(text: string, status: number): ChatCompletionRe
       content += readCompletionContent(json);
       usage = json.usage ?? usage;
     } catch {
-      throw new AiApiError('AI API returned a non-JSON response.', status);
+      throw new AiApiError('AI API trả về phản hồi không phải JSON.', status);
     }
   }
 
   if (!parsedAnyEvent) {
-    throw new AiApiError('AI API returned a non-JSON response.', status);
+    throw new AiApiError('AI API trả về phản hồi không phải JSON.', status);
   }
   if (!content) {
-    throw new AiApiError('AI API returned an empty response.', status);
+    throw new AiApiError('AI API trả về phản hồi rỗng.', status);
   }
 
   return { content, usage };
@@ -107,7 +107,7 @@ function readHttpErrorDetail(text: string, contentType: string | null, fallback:
   if (!trimmed) return fallback;
 
   if (contentType?.includes('text/html') || /^<!doctype html/i.test(trimmed) || /^<html/i.test(trimmed)) {
-    return 'AI server returned an HTML error page instead of an OpenAI-compatible JSON response. Check the API Base URL, model name, and restart the local AI gateway if needed.';
+    return 'Máy chủ AI trả về trang lỗi HTML thay vì JSON tương thích OpenAI. Hãy kiểm tra URL API Base, tên model và khởi động lại AI gateway cục bộ nếu cần.';
   }
 
   try {
@@ -120,7 +120,7 @@ function readHttpErrorDetail(text: string, contentType: string | null, fallback:
 export async function createChatCompletionResult(settings: AiSettings, messages: ChatMessage[], timeoutMs = 30000): Promise<ChatCompletionResult> {
   validateAiSettings(settings);
   if (/[^\x20-\x7E]/.test(settings.apiKey)) {
-    throw new AiApiError('API Key contains unsupported characters. Use an ASCII key such as "test" for local OpenAI-compatible gateways.');
+    throw new AiApiError('Khóa API chứa ký tự không được hỗ trợ. Hãy dùng khóa ASCII như "test" cho gateway cục bộ tương thích OpenAI.');
   }
 
   const controller = new AbortController();
@@ -162,7 +162,7 @@ export async function createChatCompletionResult(settings: AiSettings, messages:
     if (!response.ok) {
       const detail = readHttpErrorDetail(text, response.headers.get('content-type'), response.statusText);
       if (response.status === 401 || response.status === 403) {
-        throw new AiApiError('Invalid API key or unauthorized AI API request.', response.status);
+        throw new AiApiError('Khóa API không hợp lệ hoặc request AI API chưa được cấp quyền.', response.status);
       }
       throw new AiApiError(`AI API error: ${detail}`, response.status);
     }
@@ -176,14 +176,14 @@ export async function createChatCompletionResult(settings: AiSettings, messages:
         finishedAt: new Date(finishedAtMs).toISOString(),
         ok: false,
         durationMs: finishedAtMs - startedAtMs,
-        error: error instanceof Error ? error.message : 'Unknown network error.',
+        error: error instanceof Error ? error.message : 'Lỗi mạng không xác định.',
       });
     }
     if (error instanceof AiApiError) throw error;
     if (error instanceof Error && error.name === 'AbortError') {
-      throw new AiApiError('AI API request timed out. Please try again or check your local model.');
+      throw new AiApiError('Request AI API quá thời gian. Hãy thử lại hoặc kiểm tra model cục bộ.');
     }
-    throw new AiApiError('Unable to reach AI API. Check API Base URL and whether the service is running.');
+    throw new AiApiError('Không thể kết nối AI API. Hãy kiểm tra URL API Base và dịch vụ có đang chạy không.');
   } finally {
     clearTimeout(timeout);
   }
@@ -196,7 +196,7 @@ export async function createChatCompletion(settings: AiSettings, messages: ChatM
 
 export async function testConnection(settings: AiSettings): Promise<boolean> {
   const content = await createChatCompletion(
-    settings,
+    { ...settings, model: settings.plannerModel || settings.executorModel || settings.model },
     [
       { role: 'system', content: 'You are a connection test. Reply with OK only.' },
       { role: 'user', content: 'Reply with OK only.' },

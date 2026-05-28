@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { DragEvent } from 'react';
 import type { ProjectFile } from '../../shared/types';
 import { useProjectStore } from '../stores/projectStore';
 
 const CONTEXT_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.json', '.css', '.scss', '.html', '.md', '.yml', '.yaml']);
-const UI_TERMS = ['ui', 'design', 'responsive', 'layout', 'scroll', 'mobile'];
+const UI_TERMS = ['ui', 'design', 'responsive', 'layout', 'scroll', 'mobile', 'giao dien', 'thiet ke', 'di dong'];
 const API_TERMS = ['api', 'request', 'fetch', 'service'];
 const STORE_TERMS = ['store', 'state', 'zustand', 'redux'];
-const ROUTE_TERMS = ['route', 'page', 'screen'];
+const ROUTE_TERMS = ['route', 'page', 'screen', 'trang'];
 
 function tokenizeRequest(rawRequest: string): string[] {
   return rawRequest
@@ -49,142 +50,154 @@ function suggestFiles(files: ProjectFile[], rawRequest: string): string[] {
     .map((item) => item.file.relativePath);
 }
 
-interface FileCheckboxProps {
-  filePath: string;
-  checked: boolean;
-  disabled: boolean;
-  onToggle: (filePath: string) => void;
-}
-
-function FileCheckbox({ filePath, checked, disabled, onToggle }: FileCheckboxProps): JSX.Element {
-  return (
-    <label className="flex min-w-0 items-center gap-3 rounded-2xl border border-white/10 bg-ink/50 px-3 py-2 text-sm text-slate-300 transition hover:border-white/20">
-      <input
-        type="checkbox"
-        checked={checked}
-        disabled={disabled && !checked}
-        onChange={() => onToggle(filePath)}
-        className="h-4 w-4 accent-mint"
-      />
-      <span className="truncate">{filePath}</span>
-    </label>
-  );
-}
-
-export function ContextFilesPanel({ selectedFolder, scannedFiles, rawRequest }: { selectedFolder: string | null; scannedFiles: ProjectFile[]; rawRequest: string }): JSX.Element {
-  const [search, setSearch] = useState('');
+export function ContextFilesPanel({
+  selectedFolder,
+  scannedFiles,
+  rawRequest,
+}: {
+  selectedFolder: string | null;
+  scannedFiles: ProjectFile[];
+  rawRequest: string;
+}): JSX.Element {
+  const [dragActive, setDragActive] = useState(false);
   const {
     selectedContextFilePaths,
     loadedContextFiles,
+    maxContextFiles,
     contextLoading,
     contextError,
     suggestedFilePaths,
+    addContextFile,
     toggleContextFile,
     clearContextFiles,
     loadContextFiles,
     setSuggestedFilePaths,
+    setMaxContextFiles,
   } = useProjectStore();
 
   const supportedFiles = useMemo(() => scannedFiles.filter((file) => CONTEXT_EXTENSIONS.has(file.extension.toLowerCase())), [scannedFiles]);
+  const supportedFilePaths = useMemo(() => new Set(supportedFiles.map((file) => file.relativePath)), [supportedFiles]);
+  const selectedFiles = useMemo(
+    () => selectedContextFilePaths.filter((filePath) => supportedFilePaths.has(filePath)),
+    [selectedContextFilePaths, supportedFilePaths],
+  );
   const suggested = useMemo(() => suggestFiles(scannedFiles, rawRequest), [scannedFiles, rawRequest]);
-  const suggestedSet = useMemo(() => new Set(suggestedFilePaths), [suggestedFilePaths]);
 
   useEffect(() => {
     setSuggestedFilePaths(suggested);
   }, [setSuggestedFilePaths, suggested]);
 
-  const filteredFiles = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    const files = supportedFiles.filter((file) => !suggestedSet.has(file.relativePath));
-    if (!query) return files.slice(0, 80);
-    return files.filter((file) => file.relativePath.toLowerCase().includes(query)).slice(0, 80);
-  }, [search, suggestedSet, supportedFiles]);
-
-  const disabledByLimit = selectedContextFilePaths.length >= 10;
+  useEffect(() => {
+    void window.doni.getSettings?.().then((settings) => setMaxContextFiles(settings.maxContextFiles)).catch(() => undefined);
+  }, [setMaxContextFiles]);
 
   const loadSelected = async (): Promise<void> => {
     if (!selectedFolder) return;
     await loadContextFiles(selectedFolder);
   };
 
+  const addDroppedFile = (filePath: string): void => {
+    const normalizedPath = filePath.replace(/\\/g, '/').trim();
+    if (!normalizedPath) return;
+    if (!supportedFilePaths.has(normalizedPath)) {
+      useProjectStore.setState({ contextError: 'Chỉ kéo tệp code/text đã được quét từ cây dự án bên trái.' });
+      return;
+    }
+    addContextFile(normalizedPath);
+  };
+
+  const handleDragOver = (event: DragEvent<HTMLDivElement>): void => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    setDragActive(true);
+  };
+
+  const handleDrop = (event: DragEvent<HTMLDivElement>): void => {
+    event.preventDefault();
+    setDragActive(false);
+    const filePath = event.dataTransfer.getData('application/x-doni-project-file') || event.dataTransfer.getData('text/plain');
+    addDroppedFile(filePath);
+  };
+
   return (
     <div className="mt-6 rounded-[2rem] border border-white/10 bg-white/[0.04] p-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-skyglass">Step 4 Project Context</p>
-          <h3 className="mt-3 font-display text-2xl font-semibold text-white">Context Files</h3>
-          <p className="mt-2 text-sm text-slate-500">Choose up to 10 text/code files. File contents are read only through Electron IPC.</p>
+          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-skyglass">Bước 4: Ngữ cảnh dự án</p>
+          <h3 className="mt-3 font-display text-2xl font-semibold text-white">Tệp ngữ cảnh</h3>
+          <p className="mt-2 text-sm text-slate-500">Kéo tệp từ cây dự án bên trái rồi thả vào vùng bên dưới để gửi làm ngữ cảnh cho AI.</p>
         </div>
         <div className="rounded-full border border-mint/30 bg-mint/10 px-4 py-2 text-sm font-semibold text-mint">
-          {selectedContextFilePaths.length}/10 selected
+          {selectedContextFilePaths.length}/{maxContextFiles} đã chọn
         </div>
       </div>
 
-      <input
-        value={search}
-        onChange={(event) => setSearch(event.target.value)}
-        placeholder="Search files by path..."
-        className="mt-5 w-full rounded-2xl border border-white/10 bg-ink/70 px-4 py-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-mint/60"
-      />
-
       {suggestedFilePaths.length ? (
-        <div className="mt-5">
-          <div className="mb-3 text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Suggested Files</div>
-          <div className="grid gap-2">
+        <div className="mt-5 rounded-3xl border border-white/10 bg-ink/30 p-4">
+          <div className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Tệp gợi ý để kéo từ cây bên trái</div>
+          <div className="mt-3 flex flex-wrap gap-2">
             {suggestedFilePaths.map((filePath) => (
-              <FileCheckbox
-                key={filePath}
-                filePath={filePath}
-                checked={selectedContextFilePaths.includes(filePath)}
-                disabled={disabledByLimit}
-                onToggle={toggleContextFile}
-              />
+              <span key={filePath} className="max-w-full truncate rounded-full border border-white/10 bg-ink/60 px-3 py-1 text-xs font-mono text-slate-300">
+                {filePath}
+              </span>
             ))}
           </div>
         </div>
       ) : null}
 
-      <div className="mt-5">
-        <div className="mb-3 text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Project Files</div>
-        <div className="max-h-72 overflow-y-auto rounded-3xl border border-white/10 bg-ink/30 p-3">
-          {filteredFiles.length ? (
-            <div className="grid gap-2">
-              {filteredFiles.map((file) => (
-                <FileCheckbox
-                  key={file.relativePath}
-                  filePath={file.relativePath}
-                  checked={selectedContextFilePaths.includes(file.relativePath)}
-                  disabled={disabledByLimit}
-                  onToggle={toggleContextFile}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="px-3 py-6 text-center text-sm text-slate-500">{selectedFolder ? 'No matching supported files.' : 'Open a project folder first.'}</div>
-          )}
+      <div
+        onDragEnter={handleDragOver}
+        onDragOver={handleDragOver}
+        onDragLeave={() => setDragActive(false)}
+        onDrop={handleDrop}
+        className={`mt-5 rounded-3xl border border-dashed p-6 text-center transition ${
+          dragActive ? 'border-mint bg-mint/10 text-mint' : 'border-white/15 bg-ink/30 text-slate-400'
+        }`}
+      >
+        <div className="text-sm font-semibold text-white">Thả tệp từ cây dự án vào đây</div>
+        <div className="mt-2 text-sm">
+          {selectedFolder ? 'Chỉ nhận tệp trong dự án đang mở và thuộc định dạng ngữ cảnh được hỗ trợ.' : 'Hãy mở thư mục dự án trước.'}
         </div>
+      </div>
+
+      <div className="mt-5">
+        <div className="mb-3 text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Tệp đã chọn</div>
+        {selectedFiles.length ? (
+          <div className="grid gap-2">
+            {selectedFiles.map((filePath) => (
+              <div key={filePath} className="flex min-w-0 items-center justify-between gap-3 rounded-2xl border border-white/10 bg-ink/50 px-3 py-2 text-sm text-slate-300">
+                <span className="truncate font-mono">{filePath}</span>
+                <button type="button" onClick={() => toggleContextFile(filePath)} className="shrink-0 rounded-full border border-white/10 px-3 py-1 text-xs font-semibold text-slate-300 hover:border-ember/50 hover:text-ember">
+                  Bỏ
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-white/10 bg-ink/30 px-3 py-5 text-center text-sm text-slate-500">Chưa có tệp nào. Kéo tệp từ cây dự án bên trái để chọn.</div>
+        )}
       </div>
 
       {contextError ? <div className="mt-4 rounded-2xl border border-ember/30 bg-ember/10 px-4 py-3 text-sm font-medium text-ember">{contextError}</div> : null}
 
       <div className="mt-5 flex flex-wrap gap-3">
         <button type="button" onClick={loadSelected} disabled={!selectedFolder || contextLoading || selectedContextFilePaths.length === 0} className="rounded-full bg-mint px-5 py-3 text-sm font-extrabold text-ink transition hover:bg-mint/90 disabled:cursor-not-allowed disabled:opacity-50">
-          {contextLoading ? 'Loading context...' : 'Load Selected Context'}
+          {contextLoading ? 'Đang tải ngữ cảnh...' : 'Tải ngữ cảnh đã chọn'}
         </button>
         <button type="button" onClick={clearContextFiles} disabled={!selectedContextFilePaths.length && !loadedContextFiles.length} className="rounded-full border border-white/10 px-4 py-3 text-sm font-semibold text-white transition hover:border-ember/50 hover:text-ember disabled:cursor-not-allowed disabled:opacity-40">
-          Clear Context
+          Xóa ngữ cảnh
         </button>
       </div>
 
       {loadedContextFiles.length ? (
         <div className="mt-5 rounded-3xl border border-mint/20 bg-mint/10 p-4">
-          <div className="text-sm font-semibold text-white">Loaded context files</div>
+          <div className="text-sm font-semibold text-white">Tệp ngữ cảnh đã tải</div>
           <div className="mt-3 grid gap-2">
             {loadedContextFiles.map((file) => (
               <div key={file.relativePath} className="rounded-2xl border border-white/10 bg-ink/50 px-3 py-2 text-sm text-slate-300">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="truncate font-semibold text-slate-100">{file.relativePath}</span>
-                  <span className="text-xs text-slate-500">{Math.ceil(file.content.length / 1024)}KB loaded{file.truncated ? ' - truncated' : ''}</span>
+                  <span className="text-xs text-slate-500">{Math.ceil(file.content.length / 1024)}KB đã tải{file.truncated ? ' - đã cắt bớt' : ''}</span>
                 </div>
               </div>
             ))}

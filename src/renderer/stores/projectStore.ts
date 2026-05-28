@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+﻿import { create } from 'zustand';
 import type {
   DetectedIntent,
   ExecutePromptResponse,
@@ -11,6 +11,8 @@ import type {
   SessionItem,
   ProjectContextFile,
   ProjectFile,
+  ProjectSummary,
+  CodexCliStatus,
   PromptVariant,
   PromptVariantId,
 } from '../../shared/types';
@@ -27,9 +29,19 @@ function shortenOutputPreview(output: string): { outputPreview: string; truncate
 interface ProjectState {
   selectedFolder: string | null;
   scannedFiles: ProjectFile[];
+  projectSummary: ProjectSummary | null;
+  previewFile: ProjectContextFile | null;
+  previewLoading: boolean;
+  previewError: string | null;
+  codexStatus: CodexCliStatus | null;
+  codexStatusLoading: boolean;
   rawRequest: string;
   promptVariants: PromptVariant[];
   detectedIntent: DetectedIntent | null;
+  refinedPrompt: string;
+  executionPlan: string[];
+  taskBreakdown: string[];
+  implementationSuggestions: string[];
   selectedPromptVariant: PromptVariantId | null;
   isLoading: boolean;
   isOptimizing: boolean;
@@ -53,6 +65,7 @@ interface ProjectState {
   rollbackResult: RollbackPatchResponse | null;
   selectedContextFilePaths: string[];
   loadedContextFiles: ProjectContextFile[];
+  maxContextFiles: number;
   contextLoading: boolean;
   contextError: string | null;
   suggestedFilePaths: string[];
@@ -77,8 +90,20 @@ interface ProjectState {
   error: string | null;
   setSelectedFolder: (folderPath: string | null) => void;
   setScannedFiles: (files: ProjectFile[]) => void;
+  setProjectSummary: (summary: ProjectSummary | null) => void;
+  previewProjectFile: (folderPath: string | null, relativePath: string) => Promise<void>;
+  clearPreviewFile: () => void;
+  refreshCodexStatus: () => Promise<void>;
+  probeCodexStatus: () => Promise<void>;
   setRawRequest: (request: string) => void;
-  setPromptOptimization: (detectedIntent: DetectedIntent, variants: PromptVariant[]) => void;
+  setPromptOptimization: (
+    detectedIntent: DetectedIntent,
+    variants: PromptVariant[],
+    refinedPrompt?: string,
+    executionPlan?: string[],
+    taskBreakdown?: string[],
+    implementationSuggestions?: string[],
+  ) => void;
   setSelectedPromptVariant: (variant: PromptVariantId | null) => void;
   setLoading: (isLoading: boolean) => void;
   setOptimizing: (isOptimizing: boolean) => void;
@@ -93,10 +118,12 @@ interface ProjectState {
   setPatchLoading: (isLoading: boolean) => void;
   clearPatchPlan: () => void;
   setPatchError: (error: string | null) => void;
-  applyPatch: (folderPath: string) => Promise<void>;
+  applyPatch: (folderPath: string, relativePaths?: string[]) => Promise<void>;
   rollbackLastPatch: () => Promise<void>;
   clearApplyResult: () => void;
+  addContextFile: (filePath: string) => void;
   toggleContextFile: (filePath: string) => void;
+  setMaxContextFiles: (value: number) => void;
   clearContextFiles: () => void;
   loadContextFiles: (folderPath: string) => Promise<void>;
   setLoadedContextFiles: (files: ProjectContextFile[]) => void;
@@ -132,9 +159,19 @@ interface ProjectState {
 export const useProjectStore = create<ProjectState>((set) => ({
   selectedFolder: null,
   scannedFiles: [],
+  projectSummary: null,
+  previewFile: null,
+  previewLoading: false,
+  previewError: null,
+  codexStatus: null,
+  codexStatusLoading: false,
   rawRequest: '',
   promptVariants: [],
   detectedIntent: null,
+  refinedPrompt: '',
+  executionPlan: [],
+  taskBreakdown: [],
+  implementationSuggestions: [],
   selectedPromptVariant: null,
   isLoading: false,
   isOptimizing: false,
@@ -158,6 +195,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
   rollbackResult: null,
   selectedContextFilePaths: [],
   loadedContextFiles: [],
+  maxContextFiles: 10,
   contextLoading: false,
   contextError: null,
   suggestedFilePaths: [],
@@ -182,8 +220,53 @@ export const useProjectStore = create<ProjectState>((set) => ({
   error: null,
   setSelectedFolder: (folderPath) => set({ selectedFolder: folderPath }),
   setScannedFiles: (files) => set({ scannedFiles: files }),
+  setProjectSummary: (summary) => set({ projectSummary: summary }),
+  previewProjectFile: async (folderPath, relativePath) => {
+    if (!folderPath) {
+      set({ previewError: 'Hãy mở thư mục dự án trước khi xem tệp.' });
+      return;
+    }
+    set({ previewLoading: true, previewError: null });
+    try {
+      const result = await window.doni.readProjectFiles({ folderPath, relativePaths: [relativePath] });
+      set({ previewFile: result.files[0] ?? null });
+    } catch (error) {
+      set({ previewError: error instanceof Error ? error.message.replace(/^Error invoking remote method 'project:readFiles': Error: /, '') : 'Không thể xem trước tệp.' });
+    } finally {
+      set({ previewLoading: false });
+    }
+  },
+  clearPreviewFile: () => set({ previewFile: null, previewError: null, previewLoading: false }),
+  refreshCodexStatus: async () => {
+    if (typeof window.doni.getCodexCliStatus !== 'function') return;
+    set({ codexStatusLoading: true });
+    try {
+      set({ codexStatus: await window.doni.getCodexCliStatus() });
+    } finally {
+      set({ codexStatusLoading: false });
+    }
+  },
+  probeCodexStatus: async () => {
+    if (typeof window.doni.probeCodexCliStatus !== 'function') return;
+    const folderPath = useProjectStore.getState().selectedFolder ?? undefined;
+    set({ codexStatusLoading: true });
+    try {
+      set({ codexStatus: await window.doni.probeCodexCliStatus({ folderPath }) });
+    } catch (error) {
+      set({
+        codexStatus: {
+          available: false,
+          authenticated: false,
+          error: error instanceof Error ? error.message.replace(/^Error invoking remote method 'codex:probe': Error: /, '') : 'Kiểm tra Codex thất bại.',
+        },
+      });
+    } finally {
+      set({ codexStatusLoading: false });
+    }
+  },
   setRawRequest: (request) => set({ rawRequest: request }),
-  setPromptOptimization: (detectedIntent, variants) => set({ detectedIntent, promptVariants: variants }),
+  setPromptOptimization: (detectedIntent, variants, refinedPrompt = '', executionPlan = [], taskBreakdown = [], implementationSuggestions = []) =>
+    set({ detectedIntent, promptVariants: variants, refinedPrompt, executionPlan, taskBreakdown, implementationSuggestions }),
   setSelectedPromptVariant: (variant) => {
     set({ selectedPromptVariant: variant });
     if (!variant) return;
@@ -229,23 +312,28 @@ export const useProjectStore = create<ProjectState>((set) => ({
       applyError: null,
     }),
   setPatchError: (error) => set({ patchError: error }),
-  applyPatch: async (folderPath) => {
+  applyPatch: async (folderPath, relativePaths) => {
     const patchPlan = useProjectStore.getState().patchPlan;
     if (!patchPlan?.files.length) {
-      set({ applyError: 'Patch plan has no file changes to apply.' });
+      set({ applyError: 'Patch plan không có thay đổi tệp để áp dụng.' });
+      return;
+    }
+    const selectedFiles = relativePaths?.length ? patchPlan.files.filter((file) => relativePaths.includes(file.relativePath)) : patchPlan.files;
+    if (!selectedFiles.length) {
+      set({ applyError: 'Không có tệp patch phù hợp để áp dụng.' });
       return;
     }
 
     set({ applyLoading: true, applyError: null, lastApplyResult: null, rollbackResult: null, rollbackError: null });
     try {
-      const result = await window.doni.applyPatch({ folderPath, patchPlan });
+      const result = await window.doni.applyPatch({ folderPath, patchPlan: { ...patchPlan, files: selectedFiles } });
       set({
         lastApplyResult: result,
         lastBackupId: result.backupId,
       });
       await useProjectStore.getState().updateCurrentSession({ applyResult: result });
     } catch (error) {
-      set({ applyError: error instanceof Error ? error.message.replace(/^Error invoking remote method 'patch:apply': Error: /, '') : 'Unable to apply patch.' });
+      set({ applyError: error instanceof Error ? error.message.replace(/^Error invoking remote method 'patch:apply': Error: /, '') : 'Không thể áp dụng patch.' });
     } finally {
       set({ applyLoading: false });
     }
@@ -262,7 +350,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
       const result = await window.doni.rollbackPatch({ backupId });
       set({ rollbackResult: result });
     } catch (error) {
-      set({ rollbackError: error instanceof Error ? error.message.replace(/^Error invoking remote method 'patch:rollback': Error: /, '') : 'Unable to roll back patch.' });
+      set({ rollbackError: error instanceof Error ? error.message.replace(/^Error invoking remote method 'patch:rollback': Error: /, '') : 'Không thể hoàn tác patch.' });
     } finally {
       set({ rollbackLoading: false });
     }
@@ -275,21 +363,33 @@ export const useProjectStore = create<ProjectState>((set) => ({
       rollbackError: null,
       rollbackResult: null,
     }),
+  addContextFile: (filePath) =>
+    set((state) => {
+      if (state.selectedContextFilePaths.includes(filePath)) {
+        return { contextError: null };
+      }
+      if (state.selectedContextFilePaths.length >= state.maxContextFiles) {
+        return { contextError: `Chọn tối đa ${state.maxContextFiles} tệp ngữ cảnh.` };
+      }
+      return { selectedContextFilePaths: [...state.selectedContextFilePaths, filePath], contextError: null };
+    }),
   toggleContextFile: (filePath) =>
     set((state) => {
       const isSelected = state.selectedContextFilePaths.includes(filePath);
       if (isSelected) {
         return { selectedContextFilePaths: state.selectedContextFilePaths.filter((path) => path !== filePath), contextError: null };
       }
-      if (state.selectedContextFilePaths.length >= 10) {
-        return { contextError: 'Select at most 10 context files.' };
+      if (state.selectedContextFilePaths.length >= state.maxContextFiles) {
+        return { contextError: `Chọn tối đa ${state.maxContextFiles} tệp ngữ cảnh.` };
       }
       return { selectedContextFilePaths: [...state.selectedContextFilePaths, filePath], contextError: null };
     }),
+  setMaxContextFiles: (value) => set({ maxContextFiles: Math.max(1, Math.min(30, value)) }),
   clearContextFiles: () =>
     set({
       selectedContextFilePaths: [],
       loadedContextFiles: [],
+      maxContextFiles: 10,
       contextError: null,
     }),
   loadContextFiles: async (folderPath) => {
@@ -297,7 +397,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
     try {
       const selectedPaths = useProjectStore.getState().selectedContextFilePaths;
       if (!folderPath) {
-        throw new Error('Open a project folder before loading context files.');
+        throw new Error('Open a project folder before loading tệp ngữ cảnh.');
       }
       if (selectedPaths.length === 0) {
         throw new Error('Select at least one context file to load.');
@@ -306,7 +406,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
       useProjectStore.getState().setLoadedContextFiles(result.files);
       await useProjectStore.getState().updateCurrentSession({ loadedContextFilePaths: result.files.map((file) => file.relativePath) });
     } catch (error) {
-      set({ contextError: error instanceof Error ? error.message.replace(/^Error invoking remote method 'project:readFiles': Error: /, '') : 'Unable to load context files.' });
+      set({ contextError: error instanceof Error ? error.message.replace(/^Error invoking remote method 'project:readFiles': Error: /, '') : 'Không thể tải tệp ngữ cảnh.' });
     } finally {
       set({ contextLoading: false });
     }
@@ -358,7 +458,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
         },
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message.replace(/^Error invoking remote method 'command:run': Error: /, '') : 'Unable to run command.';
+      const message = error instanceof Error ? error.message.replace(/^Error invoking remote method 'command:run': Error: /, '') : 'Không thể chạy lệnh.';
       const preview = shortenOutputPreview(`$ ${command}\n\n[error] ${message}\n`);
       set({
         commandRunning: false,
@@ -451,7 +551,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
         errorAnalysisError:
           error instanceof Error
             ? error.message.replace(/^Error invoking remote method 'ai:analyzeCommandError': Error: /, '')
-            : 'Unable to analyze command error.',
+            : 'Không thể phân tích lỗi lệnh.',
       });
     } finally {
       set({ errorAnalysisLoading: false });
@@ -463,6 +563,10 @@ export const useProjectStore = create<ProjectState>((set) => ({
       rawRequest: state.errorAnalysisResult?.suggestedPrompt ?? state.rawRequest,
       promptVariants: [],
       detectedIntent: null,
+      refinedPrompt: '',
+      executionPlan: [],
+      taskBreakdown: [],
+      implementationSuggestions: [],
       selectedPromptVariant: null,
       executionResult: null,
       patchPlan: null,
@@ -493,7 +597,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
       const sessions = await window.doni.listSessions({ projectId: project.projectId });
       set({ activeProjectId: project.projectId, activeSessionId: null, sessions });
     } catch (error) {
-      set({ sessionError: error instanceof Error ? error.message : 'Unable to save project memory.' });
+      set({ sessionError: error instanceof Error ? error.message : 'Không thể lưu bộ nhớ dự án.' });
     } finally {
       set({ sessionLoading: false });
     }
@@ -505,7 +609,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
     try {
       set({ sessions: await window.doni.listSessions({ projectId }) });
     } catch (error) {
-      set({ sessionError: error instanceof Error ? error.message : 'Unable to load history.' });
+      set({ sessionError: error instanceof Error ? error.message : 'Không thể tải lịch sử.' });
     } finally {
       set({ sessionLoading: false });
     }
@@ -517,9 +621,13 @@ export const useProjectStore = create<ProjectState>((set) => ({
     const session = await window.doni.createSession({
       projectId: state.activeProjectId,
       initialData: {
-        title: state.rawRequest.trim().slice(0, 60) || 'Untitled session',
+        title: state.rawRequest.trim().slice(0, 60) || 'Phiên chưa đặt tên',
         rawRequest: state.rawRequest,
         detectedIntent: state.detectedIntent,
+        refinedPrompt: state.refinedPrompt,
+        executionPlan: state.executionPlan,
+        taskBreakdown: state.taskBreakdown,
+        implementationSuggestions: state.implementationSuggestions,
         promptVariants: state.promptVariants,
         selectedVariant,
         finalPrompt: selectedVariant?.prompt,
@@ -543,7 +651,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
       const updated = await window.doni.updateSession({ projectId: state.activeProjectId, sessionId, partialData });
       set((current) => ({ activeSessionId: updated.id, sessions: [updated, ...current.sessions.filter((item) => item.id !== updated.id)] }));
     } catch (error) {
-      set({ sessionError: error instanceof Error ? error.message : 'Unable to update session.' });
+      set({ sessionError: error instanceof Error ? error.message : 'Không thể cập nhật phiên.' });
     }
   },
   openSession: async (sessionId) => {
@@ -556,6 +664,10 @@ export const useProjectStore = create<ProjectState>((set) => ({
         activeSessionId: session.id,
         rawRequest: session.rawRequest,
         detectedIntent: session.detectedIntent ?? null,
+        refinedPrompt: session.refinedPrompt ?? '',
+        executionPlan: session.executionPlan ?? [],
+        taskBreakdown: session.taskBreakdown ?? [],
+        implementationSuggestions: session.implementationSuggestions ?? [],
         promptVariants: session.promptVariants ?? [],
         selectedPromptVariant: session.selectedVariant?.id ?? null,
         executionMode: session.executionMode ?? 'answer',
@@ -575,7 +687,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
         errorAnalysisResult: session.errorAnalysis ?? null,
       }));
     } catch (error) {
-      set({ sessionError: error instanceof Error ? error.message : 'Unable to open session.' });
+      set({ sessionError: error instanceof Error ? error.message : 'Không thể mở phiên.' });
     } finally {
       set({ sessionLoading: false });
     }
@@ -603,8 +715,18 @@ export const useProjectStore = create<ProjectState>((set) => ({
     set({
       selectedFolder: null,
       scannedFiles: [],
+      projectSummary: null,
+      previewFile: null,
+      previewLoading: false,
+      previewError: null,
+      codexStatus: null,
+      codexStatusLoading: false,
       promptVariants: [],
       detectedIntent: null,
+      refinedPrompt: '',
+      executionPlan: [],
+      taskBreakdown: [],
+      implementationSuggestions: [],
       selectedPromptVariant: null,
       executionResult: null,
       executionMode: 'answer',

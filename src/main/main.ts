@@ -1,5 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { execFile } from 'node:child_process';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { scanProject } from './fileScanner';
 import { getAiSettings, saveAiSettings, validateAiSettings } from './aiSettingsService';
 import { clearAiNetworkEvents, listAiNetworkEvents, testConnection } from './aiClient';
@@ -8,6 +10,7 @@ import { executePrompt } from './executionAiService';
 import { readProjectFiles } from './projectFileReaderService';
 import { applyPatchPlan, rollbackPatch } from './patchApplyService';
 import { runProjectCommand, stopProjectCommand } from './commandRunnerService';
+import { getCodexCliStatus, probeCodexCliStatus, runCodexCli } from './codexCliService';
 import { analyzeCommandError } from './errorAnalyzerService';
 import {
   clearProjectSessions,
@@ -29,12 +32,17 @@ import type {
   FolderPickerResult,
   OptimizePromptRequest,
   OptimizePromptResponse,
+  OpenInEditorRequest,
   ReadProjectFilesRequest,
   ReadProjectFilesResponse,
   RollbackPatchRequest,
   RollbackPatchResponse,
   RunCommandRequest,
   RunCommandResponse,
+  CodexCliStatus,
+  ProbeCodexCliRequest,
+  RunCodexCliRequest,
+  RunCodexCliResponse,
   ErrorAnalysisResult,
   CreateSessionRequest,
   ProjectMemoryInfo,
@@ -47,6 +55,7 @@ import type {
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 let selectedProjectFolder: string | null = null;
+const execFileAsync = promisify(execFile);
 
 function friendlyError(error: unknown): string {
   return error instanceof Error ? error.message : 'Unexpected AI error.';
@@ -104,6 +113,45 @@ ipcMain.handle('project:readFiles', async (_event, request: ReadProjectFilesRequ
       throw new Error('Open a project folder before loading context files.');
     }
     return await readProjectFiles(request.folderPath, request.relativePaths);
+  } catch (error) {
+    throw new Error(friendlyError(error));
+  }
+});
+
+ipcMain.handle('project:openInVSCode', async (_event, request: OpenInEditorRequest): Promise<void> => {
+  try {
+    if (!selectedProjectFolder || path.resolve(request.folderPath) !== selectedProjectFolder) {
+      throw new Error('Open a project folder before opening VS Code.');
+    }
+    const target = request.relativePath ? path.resolve(request.folderPath, request.relativePath) : path.resolve(request.folderPath);
+    if (!target.toLowerCase().startsWith(path.resolve(request.folderPath).toLowerCase())) {
+      throw new Error('Target path is outside the open project.');
+    }
+    await execFileAsync('code', [target]);
+  } catch (error) {
+    throw new Error(friendlyError(error));
+  }
+});
+
+ipcMain.handle('codex:status', async (): Promise<CodexCliStatus> => getCodexCliStatus());
+
+ipcMain.handle('codex:probe', async (_event, request?: ProbeCodexCliRequest): Promise<CodexCliStatus> => {
+  try {
+    if (request?.folderPath && (!selectedProjectFolder || path.resolve(request.folderPath) !== selectedProjectFolder)) {
+      throw new Error('Open a project folder before probing Codex in that folder.');
+    }
+    return await probeCodexCliStatus(request?.folderPath);
+  } catch (error) {
+    throw new Error(friendlyError(error));
+  }
+});
+
+ipcMain.handle('codex:run', async (_event, request: RunCodexCliRequest): Promise<RunCodexCliResponse> => {
+  try {
+    if (!selectedProjectFolder || path.resolve(request.folderPath) !== selectedProjectFolder) {
+      throw new Error('Open a project folder before running Codex CLI.');
+    }
+    return await runCodexCli(request);
   } catch (error) {
     throw new Error(friendlyError(error));
   }
@@ -202,10 +250,10 @@ ipcMain.handle('optimize-prompt', async (_event, request: OptimizePromptRequest)
 ipcMain.handle('ai:executePrompt', async (_event, request: ExecutePromptRequest): Promise<ExecutePromptResponse> => {
   try {
     if (!request.selectedVariant) {
-      throw new Error('Select a prompt strategy first.');
+      throw new Error('Select a strategy first.');
     }
     if (!request.finalPrompt.trim()) {
-      throw new Error('Final prompt is empty. Select a prompt strategy first.');
+      throw new Error('Final prompt is empty. Select a strategy first.');
     }
     const settings = await getAiSettings();
     validateAiSettings(settings);

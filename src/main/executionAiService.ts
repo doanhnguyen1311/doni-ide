@@ -1,5 +1,6 @@
 import type { AiSettings, ExecutePromptRequest, ExecutePromptResponse, PatchFileChange, PatchPlan, ProjectContext, ProjectContextFile } from '../shared/types';
 import { createChatCompletionResult } from './aiClient';
+import { buildLanguageInstruction } from './languagePreference';
 
 const ANSWER_SYSTEM_PROMPT = `You are a senior software engineer working inside an AI coding companion.
 You receive an optimized coding prompt from the user.
@@ -17,7 +18,8 @@ Rules:
 - Be honest about missing context.
 - Use the provided file contents when they are present.
 - Reference file paths when suggesting changes.
-- If more files are needed, say exactly which files.`;
+- If more files are needed, say exactly which files.
+- Match the user's language for every user-facing sentence.`;
 
 const PATCH_SYSTEM_PROMPT = `You are a patch generator for an AI coding companion.
 You receive:
@@ -33,6 +35,7 @@ Your job:
 - do not modify files not provided in context
 - preserve existing behavior unless requested
 - keep changes minimal and reviewable
+- write user-facing JSON fields in the same language as the user's request
 
 Return JSON format:
 {
@@ -70,6 +73,7 @@ function buildExecutionContext(request: ExecutePromptRequest): string {
   return JSON.stringify(
     {
       rawRequest: request.rawRequest,
+      languageInstruction: buildLanguageInstruction(request.rawRequest),
       detectedIntent: request.detectedIntent,
       selectedPromptVariant: request.selectedVariant,
       projectContext: request.projectContext,
@@ -79,7 +83,7 @@ function buildExecutionContext(request: ExecutePromptRequest): string {
         truncated: file.truncated,
       })),
       instruction:
-        'Answer the optimized prompt using the lightweight project metadata and any loaded file contents provided. Do not claim file edits, patches, or applied changes.',
+        'Answer the optimized prompt using the lightweight project metadata and any loaded file contents provided. Do not claim file edits, patches, or applied changes. Follow languageInstruction for all user-facing text.',
     },
     null,
     2,
@@ -184,7 +188,7 @@ export async function executePrompt(
 ): Promise<ExecutePromptResponse> {
   const trimmedPrompt = finalPrompt.trim();
   if (!trimmedPrompt) {
-    throw new Error('Final prompt is empty. Select a prompt strategy first.');
+    throw new Error('Final prompt is empty. Select a strategy first.');
   }
 
   if (request.executionMode === 'patch') {
@@ -192,15 +196,16 @@ export async function executePrompt(
       throw new Error('Load at least one context file before generating a patch.');
     }
 
+    const executorSettings = { ...settings, model: settings.executorModel || settings.model };
     const result = await createChatCompletionResult(
-      settings,
+      executorSettings,
       [
         { role: 'system', content: PATCH_SYSTEM_PROMPT },
         {
           role: 'user',
           content: `${buildExecutionContext({ ...request, finalPrompt: trimmedPrompt, projectContext })}${formatProjectFilesContext(
             request.contextFiles,
-          )}\n\nOptimized prompt:\n${trimmedPrompt}`,
+          )}\n\nFinal executor prompt:\n${trimmedPrompt}`,
         },
       ],
       90000,
@@ -220,14 +225,14 @@ export async function executePrompt(
   // TODO: Add streaming support with fetch stream parsing and IPC chunk events.
   // The request body should set stream: true, then relay delta chunks from main to renderer.
   const result = await createChatCompletionResult(
-    settings,
+    { ...settings, model: settings.executorModel || settings.model },
     [
       { role: 'system', content: ANSWER_SYSTEM_PROMPT },
       {
         role: 'user',
         content: `${buildExecutionContext({ ...request, finalPrompt: trimmedPrompt, projectContext })}${formatProjectFilesContext(
           request.contextFiles,
-        )}\n\nOptimized prompt:\n${trimmedPrompt}`,
+        )}\n\nFinal executor prompt:\n${trimmedPrompt}`,
       },
     ],
     60000,

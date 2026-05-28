@@ -34,6 +34,9 @@ import type {
   OptimizePromptRequest,
   OptimizePromptResponse,
   OpenInEditorRequest,
+  ProjectChangeSummaryRequest,
+  ProjectChangeSummaryResponse,
+  ProjectScanRequest,
   ReadProjectFilesRequest,
   ReadProjectFilesResponse,
   RollbackPatchRequest,
@@ -52,11 +55,34 @@ import type {
   SessionItem,
   SessionRequest,
   UpdateSessionRequest,
+  ScanProjectResult,
 } from '../shared/types';
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 let selectedProjectFolder: string | null = null;
 const execFileAsync = promisify(execFile);
+
+async function getGitChangeSummary(folderPath: string): Promise<ProjectChangeSummaryResponse> {
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', folderPath, 'diff', '--numstat', '--'], { timeout: 10000 });
+    const files = stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const [addedText, removedText, ...pathParts] = line.split(/\s+/);
+        return {
+          relativePath: pathParts.join(' '),
+          added: Number.parseInt(addedText, 10) || 0,
+          removed: Number.parseInt(removedText, 10) || 0,
+        };
+      })
+      .filter((file) => file.relativePath);
+    return { files, source: 'git' };
+  } catch {
+    return { files: [], source: 'unavailable' };
+  }
+}
 
 function friendlyError(error: unknown): string {
   return error instanceof Error ? error.message : 'Unexpected AI error.';
@@ -115,6 +141,20 @@ ipcMain.handle('project:open-folder', async (): Promise<FolderPickerResult> => {
     folderPath,
     scan,
   };
+});
+
+ipcMain.handle('project:scan-folder', async (_event, request: ProjectScanRequest): Promise<ScanProjectResult> => {
+  if (!selectedProjectFolder || path.resolve(request.folderPath) !== selectedProjectFolder) {
+    throw new Error('Open a project folder before refreshing the project tree.');
+  }
+  return await scanProject(request.folderPath);
+});
+
+ipcMain.handle('project:changeSummary', async (_event, request: ProjectChangeSummaryRequest): Promise<ProjectChangeSummaryResponse> => {
+  if (!selectedProjectFolder || path.resolve(request.folderPath) !== selectedProjectFolder) {
+    throw new Error('Open a project folder before reading changed files.');
+  }
+  return await getGitChangeSummary(request.folderPath);
 });
 
 ipcMain.handle('project:readFiles', async (_event, request: ReadProjectFilesRequest): Promise<ReadProjectFilesResponse> => {

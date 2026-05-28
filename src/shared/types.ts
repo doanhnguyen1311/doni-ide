@@ -27,6 +27,25 @@ export interface FolderPickerResult {
   scan?: ScanProjectResult;
 }
 
+export interface ProjectScanRequest {
+  folderPath: string;
+}
+
+export interface ProjectChangeSummaryRequest {
+  folderPath: string;
+}
+
+export interface ProjectChangedFileSummary {
+  relativePath: string;
+  added: number;
+  removed: number;
+}
+
+export interface ProjectChangeSummaryResponse {
+  files: ProjectChangedFileSummary[];
+  source: 'git' | 'unavailable';
+}
+
 export type PromptVariantId = string;
 
 export interface PromptVariant {
@@ -376,6 +395,8 @@ export interface AiExecutionStreamEvent {
 
 export interface ElectronApi {
   openProjectFolder: () => Promise<FolderPickerResult>;
+  scanProjectFolder: (request: ProjectScanRequest) => Promise<ScanProjectResult>;
+  getProjectChangeSummary: (request: ProjectChangeSummaryRequest) => Promise<ProjectChangeSummaryResponse>;
   getSettings: () => Promise<AiSettings>;
   saveSettings: (settings: AiSettings) => Promise<AiSettings>;
   testConnection: (settings: AiSettings) => Promise<{ ok: boolean; error?: string }>;

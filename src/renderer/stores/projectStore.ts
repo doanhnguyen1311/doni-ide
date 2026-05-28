@@ -91,6 +91,7 @@ interface ProjectState {
   setSelectedFolder: (folderPath: string | null) => void;
   setScannedFiles: (files: ProjectFile[]) => void;
   setProjectSummary: (summary: ProjectSummary | null) => void;
+  refreshProjectScan: (folderPath?: string | null) => Promise<void>;
   previewProjectFile: (folderPath: string | null, relativePath: string) => Promise<void>;
   clearPreviewFile: () => void;
   refreshCodexStatus: () => Promise<void>;
@@ -148,6 +149,7 @@ interface ProjectState {
   loadProjectSessions: () => Promise<void>;
   createCurrentSession: () => Promise<SessionItem | null>;
   updateCurrentSession: (partialData: Partial<SessionItem>) => Promise<void>;
+  startNewChat: () => void;
   openSession: (sessionId: string) => Promise<void>;
   renameSession: (sessionId: string, title: string) => Promise<void>;
   deleteSession: (sessionId: string) => Promise<void>;
@@ -221,6 +223,12 @@ export const useProjectStore = create<ProjectState>((set) => ({
   setSelectedFolder: (folderPath) => set({ selectedFolder: folderPath }),
   setScannedFiles: (files) => set({ scannedFiles: files }),
   setProjectSummary: (summary) => set({ projectSummary: summary }),
+  refreshProjectScan: async (folderPath) => {
+    const targetFolder = folderPath ?? useProjectStore.getState().selectedFolder;
+    if (!targetFolder) return;
+    const scan = await window.doni.scanProjectFolder({ folderPath: targetFolder });
+    set({ scannedFiles: scan.files, projectSummary: scan.summary });
+  },
   previewProjectFile: async (folderPath, relativePath) => {
     if (!folderPath) {
       set({ previewError: 'Hãy mở thư mục dự án trước khi xem tệp.' });
@@ -331,6 +339,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
         lastApplyResult: result,
         lastBackupId: result.backupId,
       });
+      await useProjectStore.getState().refreshProjectScan(folderPath);
       await useProjectStore.getState().updateCurrentSession({ applyResult: result });
     } catch (error) {
       set({ applyError: error instanceof Error ? error.message.replace(/^Error invoking remote method 'patch:apply': Error: /, '') : 'Không thể áp dụng patch.' });
@@ -654,6 +663,36 @@ export const useProjectStore = create<ProjectState>((set) => ({
       set({ sessionError: error instanceof Error ? error.message : 'Không thể cập nhật phiên.' });
     }
   },
+  startNewChat: () =>
+    set({
+      activeSessionId: null,
+      rawRequest: '',
+      promptVariants: [],
+      detectedIntent: null,
+      refinedPrompt: '',
+      executionPlan: [],
+      taskBreakdown: [],
+      implementationSuggestions: [],
+      selectedPromptVariant: null,
+      executionResult: null,
+      executionMode: 'answer',
+      executionLoading: false,
+      executionError: null,
+      executionStartedAt: null,
+      executionFinishedAt: null,
+      patchPlan: null,
+      patchLoading: false,
+      patchError: null,
+      patchWarnings: [],
+      diffTextByFile: {},
+      applyError: null,
+      lastApplyResult: null,
+      rollbackError: null,
+      rollbackResult: null,
+      errorAnalysisResult: null,
+      errorAnalysisError: null,
+      error: null,
+    }),
   openSession: async (sessionId) => {
     const projectId = useProjectStore.getState().activeProjectId;
     if (!projectId) return;
@@ -662,6 +701,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
       const session = await window.doni.getSession({ projectId, sessionId });
       set((state) => ({
         activeSessionId: session.id,
+        sessions: [session, ...state.sessions.filter((item) => item.id !== session.id)],
         rawRequest: session.rawRequest,
         detectedIntent: session.detectedIntent ?? null,
         refinedPrompt: session.refinedPrompt ?? '',

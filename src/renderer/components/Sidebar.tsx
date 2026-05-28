@@ -10,6 +10,7 @@ interface TreeNode {
 }
 
 interface SidebarProps {
+  width: number;
   selectedFolder: string | null;
   fileCount: number;
   files: ProjectFile[];
@@ -71,7 +72,7 @@ function TreeItem({ node, depth, selectedFolder }: { node: TreeNode; depth: numb
   );
 }
 
-export function Sidebar({ selectedFolder, fileCount, files, projectSummary, activeView, onOpenWorkspace, onOpenSettings }: SidebarProps): JSX.Element {
+export function Sidebar({ width, selectedFolder, fileCount, files, projectSummary, activeView, onOpenWorkspace, onOpenSettings }: SidebarProps): JSX.Element {
   const tree = useMemo(() => buildTree(files), [files]);
   const rootChildren = Array.from(tree.children.values()).sort((a, b) => Number(Boolean(a.file)) - Number(Boolean(b.file)) || a.name.localeCompare(b.name));
   const codexStatus = useProjectStore((state) => state.codexStatus);
@@ -90,7 +91,7 @@ export function Sidebar({ selectedFolder, fileCount, files, projectSummary, acti
   }, [refreshCodexStatus]);
 
   return (
-    <aside className="flex h-full w-80 shrink-0 flex-col border-r border-white/10 bg-panel/95">
+    <aside className="flex h-full shrink-0 flex-col border-r border-white/10 bg-panel/95" style={{ width }}>
       <div className="border-b border-white/10 p-5">
         <div className="mb-4 flex items-center justify-between gap-3">
           <div className="inline-flex rounded-full border border-ember/30 bg-ember/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.28em] text-ember">

@@ -13,6 +13,9 @@ import type {
   OptimizePromptRequest,
   OptimizePromptResponse,
   OpenInEditorRequest,
+  ProjectChangeSummaryRequest,
+  ProjectChangeSummaryResponse,
+  ProjectScanRequest,
   ReadProjectFilesRequest,
   ReadProjectFilesResponse,
   RollbackPatchRequest,
@@ -34,10 +37,13 @@ import type {
   RunCommandResponse,
   RunCodexCliRequest,
   RunCodexCliResponse,
+  ScanProjectResult,
 } from '../shared/types';
 
 const electronApi: ElectronApi = {
   openProjectFolder: (): Promise<FolderPickerResult> => ipcRenderer.invoke('project:open-folder'),
+  scanProjectFolder: (request: ProjectScanRequest): Promise<ScanProjectResult> => ipcRenderer.invoke('project:scan-folder', request),
+  getProjectChangeSummary: (request: ProjectChangeSummaryRequest): Promise<ProjectChangeSummaryResponse> => ipcRenderer.invoke('project:changeSummary', request),
   getSettings: (): Promise<AiSettings> => ipcRenderer.invoke('settings:get'),
   saveSettings: (settings: AiSettings): Promise<AiSettings> => ipcRenderer.invoke('settings:save', settings),
   testConnection: (settings: AiSettings): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('ai:testConnection', settings),

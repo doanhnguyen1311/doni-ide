@@ -43,7 +43,7 @@ export interface ProjectChangedFileSummary {
 
 export interface ProjectChangeSummaryResponse {
   files: ProjectChangedFileSummary[];
-  source: 'git' | 'unavailable';
+  source: "git" | "unavailable";
 }
 
 export type PromptVariantId = string;
@@ -56,13 +56,19 @@ export interface PromptVariant {
   plan: string[];
   tradeoffs: string[];
   suggestedFiles: string[];
-  estimatedRisk: 'low' | 'medium' | 'high';
+  estimatedRisk: "low" | "medium" | "high";
 }
 
 export interface DetectedIntent {
-  taskType: 'bugfix' | 'refactor' | 'ui' | 'feature' | 'explanation' | 'unknown';
+  taskType:
+    | "bugfix"
+    | "refactor"
+    | "ui"
+    | "feature"
+    | "explanation"
+    | "unknown";
   summary: string;
-  riskLevel: 'low' | 'medium' | 'high';
+  riskLevel: "low" | "medium" | "high";
   needsProjectContext: boolean;
 }
 
@@ -145,7 +151,7 @@ export interface RunCodexCliRequest {
   folderPath: string;
   prompt: string;
   model?: string;
-  sandbox?: 'read-only' | 'workspace-write';
+  sandbox?: "read-only" | "workspace-write";
 }
 
 export interface RunCodexCliResponse {
@@ -162,13 +168,13 @@ export interface OptimizePromptRequest {
   projectContext: ProjectContextSummary;
 }
 
-export type ExecutionMode = 'answer' | 'patch';
+export type ExecutionMode = "answer" | "patch";
 
-export type PatchRiskLevel = 'low' | 'medium' | 'high';
+export type PatchRiskLevel = "low" | "medium" | "high";
 
 export interface PatchFileChange {
   relativePath: string;
-  changeType: 'modify';
+  changeType: "modify";
   oldContent: string;
   newContent: string;
   notes?: string;
@@ -183,7 +189,7 @@ export interface PatchPlan {
 
 export interface PatchApplyFileResult {
   relativePath: string;
-  status: 'applied' | 'skipped' | 'failed';
+  status: "applied" | "skipped" | "failed";
   message?: string;
 }
 
@@ -201,7 +207,7 @@ export interface ApplyPatchResponse {
 
 export interface PatchRollbackFileResult {
   relativePath: string;
-  status: 'restored' | 'failed';
+  status: "restored" | "failed";
   message?: string;
 }
 
@@ -214,7 +220,13 @@ export interface RollbackPatchResponse {
   restoredFiles: PatchRollbackFileResult[];
 }
 
-export type CommandStatus = 'idle' | 'running' | 'success' | 'failed' | 'stopped' | 'blocked';
+export type CommandStatus =
+  | "idle"
+  | "running"
+  | "success"
+  | "failed"
+  | "stopped"
+  | "blocked";
 
 export interface RunCommandRequest {
   folderPath: string;
@@ -226,7 +238,7 @@ export interface RunCommandResponse {
 }
 
 export interface CommandOutputEvent {
-  type: 'stdout' | 'stderr';
+  type: "stdout" | "stderr";
   data: string;
   timestamp: string;
 }
@@ -241,7 +253,7 @@ export interface CommandExitEvent {
   durationMs: number;
 }
 
-export type ErrorAnalysisConfidence = 'low' | 'medium' | 'high';
+export type ErrorAnalysisConfidence = "low" | "medium" | "high";
 
 export interface AnalyzeCommandErrorRequest {
   command: string;
@@ -363,19 +375,19 @@ export interface AiSettings {
   plannerModel: string;
   executorModel: string;
   customModels: string[];
-  executorProvider: 'custom' | 'codex';
+  executorProvider: "custom" | "codex";
   maxContextFiles: number;
   ignorePatterns: string[];
   autoBackup: boolean;
-  diffMode: 'inline' | 'split';
-  codexSandbox: 'read-only' | 'workspace-write';
+  diffMode: "inline" | "split";
+  codexSandbox: "read-only" | "workspace-write";
 }
 
 export interface AiNetworkEvent {
   id: string;
   startedAt: string;
   finishedAt?: string;
-  method: 'POST';
+  method: "POST";
   url: string;
   model: string;
   status?: number;
@@ -387,45 +399,107 @@ export interface AiNetworkEvent {
 }
 
 export interface AiExecutionStreamEvent {
-  source: 'api' | 'codex';
-  type: 'content' | 'stdout' | 'stderr' | 'status';
+  source: "api" | "codex";
+  type: "content" | "stdout" | "stderr" | "status";
   data: string;
   timestamp: string;
 }
 
+export type UpdaterPhase =
+  | "idle"
+  | "checking"
+  | "available"
+  | "not-available"
+  | "downloading"
+  | "downloaded"
+  | "error";
+
+export interface UpdaterStatus {
+  phase: UpdaterPhase;
+  currentVersion: string;
+  updateVersion?: string;
+  message?: string;
+  error?: string;
+  isDev: boolean;
+  checkedAt?: string;
+}
+
+export interface UpdaterProgress {
+  percent: number;
+  transferred: number;
+  total: number;
+  bytesPerSecond: number;
+}
+
+export interface UpdaterApi {
+  status: () => Promise<UpdaterStatus>;
+  check: () => Promise<UpdaterStatus>;
+  download: () => Promise<UpdaterStatus>;
+  install: () => Promise<void>;
+  onStatus: (callback: (status: UpdaterStatus) => void) => () => void;
+  onProgress: (callback: (progress: UpdaterProgress) => void) => () => void;
+}
+
 export interface ElectronApi {
   openProjectFolder: () => Promise<FolderPickerResult>;
-  scanProjectFolder: (request: ProjectScanRequest) => Promise<ScanProjectResult>;
-  getProjectChangeSummary: (request: ProjectChangeSummaryRequest) => Promise<ProjectChangeSummaryResponse>;
+  scanProjectFolder: (
+    request: ProjectScanRequest,
+  ) => Promise<ScanProjectResult>;
+  getProjectChangeSummary: (
+    request: ProjectChangeSummaryRequest,
+  ) => Promise<ProjectChangeSummaryResponse>;
   getSettings: () => Promise<AiSettings>;
   saveSettings: (settings: AiSettings) => Promise<AiSettings>;
-  testConnection: (settings: AiSettings) => Promise<{ ok: boolean; error?: string }>;
+  testConnection: (
+    settings: AiSettings,
+  ) => Promise<{ ok: boolean; error?: string }>;
   getAiNetworkEvents: () => Promise<AiNetworkEvent[]>;
   clearAiNetworkEvents: () => Promise<void>;
   cancelActiveAi: () => Promise<void>;
   onAiNetworkEvent: (callback: (event: AiNetworkEvent) => void) => () => void;
-  onAiExecutionStream: (callback: (event: AiExecutionStreamEvent) => void) => () => void;
-  optimizePrompt: (request: OptimizePromptRequest) => Promise<OptimizePromptResponse>;
-  executePrompt: (request: ExecutePromptRequest) => Promise<ExecutePromptResponse>;
-  readProjectFiles: (request: ReadProjectFilesRequest) => Promise<ReadProjectFilesResponse>;
+  onAiExecutionStream: (
+    callback: (event: AiExecutionStreamEvent) => void,
+  ) => () => void;
+  optimizePrompt: (
+    request: OptimizePromptRequest,
+  ) => Promise<OptimizePromptResponse>;
+  executePrompt: (
+    request: ExecutePromptRequest,
+  ) => Promise<ExecutePromptResponse>;
+  readProjectFiles: (
+    request: ReadProjectFilesRequest,
+  ) => Promise<ReadProjectFilesResponse>;
   openInVSCode: (request: OpenInEditorRequest) => Promise<void>;
   getCodexCliStatus: () => Promise<CodexCliStatus>;
-  probeCodexCliStatus: (request?: ProbeCodexCliRequest) => Promise<CodexCliStatus>;
+  probeCodexCliStatus: (
+    request?: ProbeCodexCliRequest,
+  ) => Promise<CodexCliStatus>;
   runCodexCli: (request: RunCodexCliRequest) => Promise<RunCodexCliResponse>;
   stopCodexCli: () => Promise<void>;
   applyPatch: (request: ApplyPatchRequest) => Promise<ApplyPatchResponse>;
-  rollbackPatch: (request: RollbackPatchRequest) => Promise<RollbackPatchResponse>;
-  runProjectCommand: (request: RunCommandRequest) => Promise<RunCommandResponse>;
+  rollbackPatch: (
+    request: RollbackPatchRequest,
+  ) => Promise<RollbackPatchResponse>;
+  runProjectCommand: (
+    request: RunCommandRequest,
+  ) => Promise<RunCommandResponse>;
   stopProjectCommand: () => Promise<void>;
-  onCommandOutput: (callback: (event: CommandOutputEvent) => void) => () => void;
+  onCommandOutput: (
+    callback: (event: CommandOutputEvent) => void,
+  ) => () => void;
   onCommandError: (callback: (event: CommandErrorEvent) => void) => () => void;
   onCommandExit: (callback: (event: CommandExitEvent) => void) => () => void;
-  analyzeCommandError: (request: AnalyzeCommandErrorRequest) => Promise<ErrorAnalysisResult>;
-  saveProjectMemory: (request: SaveProjectMemoryRequest) => Promise<ProjectMemoryInfo>;
+  analyzeCommandError: (
+    request: AnalyzeCommandErrorRequest,
+  ) => Promise<ErrorAnalysisResult>;
+  saveProjectMemory: (
+    request: SaveProjectMemoryRequest,
+  ) => Promise<ProjectMemoryInfo>;
   createSession: (request: CreateSessionRequest) => Promise<SessionItem>;
   updateSession: (request: UpdateSessionRequest) => Promise<SessionItem>;
   listSessions: (request: ProjectSessionsRequest) => Promise<SessionItem[]>;
   getSession: (request: SessionRequest) => Promise<SessionItem>;
   deleteSession: (request: SessionRequest) => Promise<void>;
   clearProjectSessions: (request: ProjectSessionsRequest) => Promise<void>;
+  updater: UpdaterApi;
 }

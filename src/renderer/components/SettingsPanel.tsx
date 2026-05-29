@@ -3,6 +3,8 @@ import type {
   AiNetworkEvent,
   AiSettings,
   CodexCliStatus,
+  UpdaterProgress,
+  UpdaterStatus,
 } from "../../shared/types";
 
 const emptySettings: AiSettings = {
@@ -35,6 +37,12 @@ export function SettingsPanel(): JSX.Element {
   const [isBusy, setBusy] = useState(false);
   const [networkEvents, setNetworkEvents] = useState<AiNetworkEvent[]>([]);
   const [codexStatus, setCodexStatus] = useState<CodexCliStatus | null>(null);
+  const [updaterStatus, setUpdaterStatus] = useState<UpdaterStatus | null>(
+    null,
+  );
+  const [updaterProgress, setUpdaterProgress] =
+    useState<UpdaterProgress | null>(null);
+  const [updaterBusy, setUpdaterBusy] = useState(false);
   const [newModelName, setNewModelName] = useState("");
 
   useEffect(() => {
@@ -67,6 +75,22 @@ export function SettingsPanel(): JSX.Element {
         ),
       );
     });
+  }, []);
+
+  useEffect(() => {
+    const updater = window.electron?.updater ?? window.doni.updater;
+    if (!updater) return;
+
+    void updater
+      .status()
+      .then(setUpdaterStatus)
+      .catch(() => undefined);
+    const removeStatusListener = updater.onStatus(setUpdaterStatus);
+    const removeProgressListener = updater.onProgress(setUpdaterProgress);
+    return () => {
+      removeStatusListener();
+      removeProgressListener();
+    };
   }, []);
 
   const update = (key: keyof AiSettings, value: string): void =>
@@ -174,6 +198,64 @@ export function SettingsPanel(): JSX.Element {
     setCodexStatus(await window.doni.getCodexCliStatus());
   };
 
+  const runUpdaterAction = async (
+    action: "check" | "download" | "install",
+  ): Promise<void> => {
+    const updater = window.electron?.updater ?? window.doni.updater;
+    if (!updater) {
+      setUpdaterStatus({
+        phase: "error",
+        currentVersion: "unknown",
+        isDev: false,
+        error: "Electron preload API đã cũ. Hãy khởi động lại toàn bộ app.",
+      });
+      return;
+    }
+
+    setUpdaterBusy(true);
+    try {
+      if (action === "check") {
+        setUpdaterStatus(await updater.check());
+      } else if (action === "download") {
+        setUpdaterStatus(await updater.download());
+      } else {
+        await updater.install();
+      }
+    } catch (error) {
+      setUpdaterStatus((current) => ({
+        phase: "error",
+        currentVersion: current?.currentVersion ?? "unknown",
+        isDev: current?.isDev ?? false,
+        error:
+          error instanceof Error ? error.message : "Thao tác update thất bại.",
+      }));
+    } finally {
+      setUpdaterBusy(false);
+    }
+  };
+
+  const updaterPhase = updaterStatus?.phase ?? "idle";
+  const updaterAction =
+    updaterPhase === "available"
+      ? "download"
+      : updaterPhase === "downloaded"
+        ? "install"
+        : "check";
+  const updaterButtonText =
+    updaterPhase === "not-available"
+      ? "Check again"
+      : updaterPhase === "available"
+        ? "Download update"
+        : updaterPhase === "downloading"
+          ? `Downloading ${Math.round(updaterProgress?.percent ?? 0)}%`
+          : updaterPhase === "downloaded"
+            ? "Install and restart"
+            : "Check for updates";
+  const updaterStatusText =
+    updaterStatus?.error ??
+    updaterStatus?.message ??
+    (updaterPhase === "idle" ? "Chưa kiểm tra update." : "Đang xử lý update.");
+
   return (
     <div className="rounded-[2rem] border border-white/10 bg-white/[0.04] p-6 shadow-glow backdrop-blur">
       <h3 className="font-display text-xl font-semibold text-white">
@@ -225,9 +307,7 @@ export function SettingsPanel(): JSX.Element {
         </div>
         <div className="mt-4 grid gap-3 lg:grid-cols-2">
           <label className="text-sm text-slate-300">
-            <span className="font-semibold text-white">
-              Model lập kế hoạch
-            </span>
+            <span className="font-semibold text-white">Model lập kế hoạch</span>
             <select
               value={settings.plannerModel}
               onChange={(event) => update("plannerModel", event.target.value)}
@@ -369,6 +449,73 @@ export function SettingsPanel(): JSX.Element {
       {status ? (
         <div className="mt-3 text-sm text-skyglass">{status}</div>
       ) : null}
+
+      <div className="mt-6 rounded-3xl border border-white/10 bg-ink/40 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h4 className="font-display text-lg font-semibold text-white">
+              App Update
+            </h4>
+            <p className="mt-1 text-sm text-slate-500">
+              Version hiện tại: {updaterStatus?.currentVersion ?? "unknown"}
+            </p>
+          </div>
+          {updaterStatus?.updateVersion ? (
+            <span className="rounded-full border border-mint/30 bg-mint/10 px-3 py-1 text-xs font-bold text-mint">
+              v{updaterStatus.updateVersion}
+            </span>
+          ) : null}
+        </div>
+        {updaterStatus?.isDev ? (
+          <div className="mt-4 rounded-2xl border border-skyglass/30 bg-skyglass/10 px-4 py-3 text-sm text-skyglass">
+            Auto update chỉ hoạt động đầy đủ trên bản đã đóng gói installer.
+          </div>
+        ) : null}
+        <div
+          className={`mt-4 rounded-2xl border px-4 py-3 text-sm ${
+            updaterStatus?.error
+              ? "border-ember/30 bg-ember/10 text-ember"
+              : updaterPhase === "available" || updaterPhase === "downloaded"
+                ? "border-mint/30 bg-mint/10 text-mint"
+                : "border-white/10 bg-white/[0.03] text-slate-300"
+          }`}
+        >
+          {updaterStatusText}
+          {updaterStatus?.updateVersion ? (
+            <span className="ml-2 text-slate-400">
+              Bản mới: {updaterStatus.updateVersion}
+            </span>
+          ) : null}
+        </div>
+        {updaterPhase === "downloading" ? (
+          <div className="mt-4">
+            <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
+              <span>Download progress</span>
+              <span>{Math.round(updaterProgress?.percent ?? 0)}%</span>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-ink/80">
+              <div
+                className="h-full rounded-full bg-mint"
+                style={{
+                  width: `${Math.min(100, Math.max(0, updaterProgress?.percent ?? 0))}%`,
+                }}
+              />
+            </div>
+          </div>
+        ) : null}
+        <button
+          type="button"
+          disabled={
+            updaterBusy ||
+            updaterPhase === "checking" ||
+            updaterPhase === "downloading"
+          }
+          onClick={() => void runUpdaterAction(updaterAction)}
+          className="mt-4 rounded-full border border-mint/30 px-4 py-2 text-sm font-bold text-mint hover:bg-mint/10 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {updaterButtonText}
+        </button>
+      </div>
 
       <div className="mt-6 rounded-3xl border border-white/10 bg-ink/40 p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">

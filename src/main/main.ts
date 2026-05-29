@@ -12,6 +12,7 @@ import { applyPatchPlan, rollbackPatch } from './patchApplyService';
 import { runProjectCommand, stopProjectCommand } from './commandRunnerService';
 import { getCodexCliStatus, probeCodexCliStatus, runCodexCli, stopCodexCli } from './codexCliService';
 import { analyzeCommandError } from './errorAnalyzerService';
+import { initAutoUpdater } from './updater';
 import {
   clearProjectSessions,
   createOrUpdateProjectMemory,
@@ -116,10 +117,12 @@ function createMainWindow(): void {
   if (isDev && process.env.VITE_DEV_SERVER_URL) {
     void window.loadURL(process.env.VITE_DEV_SERVER_URL);
     window.webContents.openDevTools({ mode: 'detach' });
+    initAutoUpdater(window);
     return;
   }
 
   void window.loadFile(path.join(__dirname, '../renderer/index.html'));
+  initAutoUpdater(window);
 }
 
 ipcMain.handle('project:open-folder', async (): Promise<FolderPickerResult> => {

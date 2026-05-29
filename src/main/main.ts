@@ -13,17 +13,21 @@ import { runProjectCommand, stopProjectCommand } from './commandRunnerService';
 import { getCodexCliStatus, probeCodexCliStatus, runCodexCli, stopCodexCli } from './codexCliService';
 import { analyzeCommandError } from './errorAnalyzerService';
 import { initAutoUpdater } from './updater';
+import { applyAntiProvider, listImportedAntiProviders, readAntiProvidersFromJsonFile } from './antiProviderService';
 import {
   clearProjectSessions,
   createOrUpdateProjectMemory,
   createSession,
   deleteSession,
+  getLastProjectPath,
   getSession,
   listSessions,
   updateSession,
 } from './sessionMemoryService';
 import type {
   AiSettings,
+  AntiProviderAccount,
+  AntiProviderState,
   AiExecutionStreamEvent,
   AiNetworkEvent,
   AnalyzeCommandErrorRequest,
@@ -144,6 +148,25 @@ ipcMain.handle('project:open-folder', async (): Promise<FolderPickerResult> => {
     folderPath,
     scan,
   };
+});
+
+ipcMain.handle('project:restore-last-folder', async (): Promise<FolderPickerResult> => {
+  const folderPath = await getLastProjectPath();
+  if (!folderPath) {
+    return { canceled: true };
+  }
+
+  try {
+    const scan = await scanProject(folderPath);
+    selectedProjectFolder = path.resolve(folderPath);
+    return {
+      canceled: false,
+      folderPath,
+      scan,
+    };
+  } catch {
+    return { canceled: true };
+  }
 });
 
 ipcMain.handle('project:scan-folder', async (_event, request: ProjectScanRequest): Promise<ScanProjectResult> => {
@@ -291,6 +314,24 @@ ipcMain.handle('memory:clearProjectSessions', async (_event, request: ProjectSes
 ipcMain.handle('settings:get', async (): Promise<AiSettings> => getAiSettings());
 
 ipcMain.handle('settings:save', async (_event, settings: AiSettings): Promise<AiSettings> => saveAiSettings(settings));
+
+ipcMain.handle('anti:listImportedProviders', async (): Promise<AntiProviderState> => listImportedAntiProviders());
+
+ipcMain.handle('anti:importProviders', async (): Promise<AntiProviderAccount[]> => {
+  const result = await dialog.showOpenDialog({
+    title: 'Import provider JSON',
+    properties: ['openFile'],
+    filters: [{ name: 'JSON', extensions: ['json'] }],
+  });
+  if (result.canceled || result.filePaths.length === 0) {
+    return [];
+  }
+  return readAntiProvidersFromJsonFile(result.filePaths[0]);
+});
+
+ipcMain.handle('anti:applyProvider', async (_event, account: AntiProviderAccount): Promise<void> => {
+  await applyAntiProvider(account);
+});
 
 ipcMain.handle('ai:listNetworkEvents', async (): Promise<AiNetworkEvent[]> => listAiNetworkEvents());
 

@@ -294,6 +294,13 @@ export interface VerifyCommandSummary {
   truncated: boolean;
 }
 
+export interface SessionChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  kind?: 'plan' | 'answer' | 'patch' | 'error';
+}
+
 export interface PatchPlanSummary {
   summary: string;
   riskLevel: PatchRiskLevel;
@@ -322,6 +329,7 @@ export interface SessionItem {
   applyResult?: ApplyPatchResponse | null;
   verifyCommand?: VerifyCommandSummary | null;
   errorAnalysis?: ErrorAnalysisResult | null;
+  chatMessages?: SessionChatMessage[];
 }
 
 export interface SaveProjectMemoryRequest {
@@ -383,6 +391,19 @@ export interface AiSettings {
   codexSandbox: "read-only" | "workspace-write";
 }
 
+export interface AntiProviderAccount {
+  id: string;
+  account: string;
+  accessToken: string;
+  refreshToken: string;
+  chatgptAccountId?: string;
+}
+
+export interface AntiProviderState {
+  accounts: AntiProviderAccount[];
+  selectedProviderId?: string;
+}
+
 export interface AiNetworkEvent {
   id: string;
   startedAt: string;
@@ -442,6 +463,7 @@ export interface UpdaterApi {
 
 export interface ElectronApi {
   openProjectFolder: () => Promise<FolderPickerResult>;
+  restoreLastProjectFolder: () => Promise<FolderPickerResult>;
   scanProjectFolder: (
     request: ProjectScanRequest,
   ) => Promise<ScanProjectResult>;
@@ -450,6 +472,9 @@ export interface ElectronApi {
   ) => Promise<ProjectChangeSummaryResponse>;
   getSettings: () => Promise<AiSettings>;
   saveSettings: (settings: AiSettings) => Promise<AiSettings>;
+  listImportedAntiProviders: () => Promise<AntiProviderState>;
+  importAntiProviders: () => Promise<AntiProviderAccount[]>;
+  applyAntiProvider: (account: AntiProviderAccount) => Promise<void>;
   testConnection: (
     settings: AiSettings,
   ) => Promise<{ ok: boolean; error?: string }>;

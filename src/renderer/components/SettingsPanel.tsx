@@ -1,7 +1,9 @@
 ﻿import { useEffect, useState } from "react";
+import { useRef } from "react";
 import type {
   AiNetworkEvent,
   AiSettings,
+  AntiProviderAccount,
   CodexCliStatus,
   UpdaterProgress,
   UpdaterStatus,
@@ -37,6 +39,7 @@ export function SettingsPanel(): JSX.Element {
   const [isBusy, setBusy] = useState(false);
   const [networkEvents, setNetworkEvents] = useState<AiNetworkEvent[]>([]);
   const [codexStatus, setCodexStatus] = useState<CodexCliStatus | null>(null);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [updaterStatus, setUpdaterStatus] = useState<UpdaterStatus | null>(
     null,
   );
@@ -44,6 +47,12 @@ export function SettingsPanel(): JSX.Element {
     useState<UpdaterProgress | null>(null);
   const [updaterBusy, setUpdaterBusy] = useState(false);
   const [newModelName, setNewModelName] = useState("");
+  const autoSaveTimerRef = useRef<number | null>(null);
+  const lastSavedSettingsJsonRef = useRef<string>("");
+  const [antiAccounts, setAntiAccounts] = useState<AntiProviderAccount[]>([]);
+  const [selectedAntiProviderId, setSelectedAntiProviderId] = useState<string | null>(null);
+  const [antiStatus, setAntiStatus] = useState<string | null>(null);
+  const [antiBusyId, setAntiBusyId] = useState<string | null>(null);
 
   useEffect(() => {
     if (typeof window.doni.getSettings !== "function") {
@@ -55,7 +64,11 @@ export function SettingsPanel(): JSX.Element {
 
     void window.doni
       .getSettings()
-      .then(setSettings)
+      .then((savedSettings) => {
+        lastSavedSettingsJsonRef.current = JSON.stringify(savedSettings);
+        setSettings(savedSettings);
+        setSettingsLoaded(true);
+      })
       .catch(() => setStatus("Không thể tải cài đặt AI."));
     void window.doni
       .getAiNetworkEvents?.()
@@ -64,6 +77,13 @@ export function SettingsPanel(): JSX.Element {
     void window.doni
       .getCodexCliStatus?.()
       .then(setCodexStatus)
+      .catch(() => undefined);
+    void window.doni
+      .listImportedAntiProviders?.()
+      .then((state) => {
+        setAntiAccounts(state.accounts);
+        setSelectedAntiProviderId(state.selectedProviderId ?? null);
+      })
       .catch(() => undefined);
 
     if (typeof window.doni.onAiNetworkEvent !== "function") return;
@@ -76,6 +96,43 @@ export function SettingsPanel(): JSX.Element {
       );
     });
   }, []);
+
+  useEffect(() => {
+    if (!settingsLoaded || typeof window.doni.saveSettings !== "function") {
+      return;
+    }
+    const serializedSettings = JSON.stringify(settings);
+    if (serializedSettings === lastSavedSettingsJsonRef.current) {
+      return;
+    }
+
+    if (autoSaveTimerRef.current) {
+      window.clearTimeout(autoSaveTimerRef.current);
+    }
+    autoSaveTimerRef.current = window.setTimeout(() => {
+      void window.doni
+        .saveSettings(settings)
+        .then((savedSettings) => {
+          const savedJson = JSON.stringify(savedSettings);
+          lastSavedSettingsJsonRef.current = savedJson;
+          if (savedJson !== serializedSettings) {
+            setSettings(savedSettings);
+          }
+          setStatus("Đã tự lưu cài đặt.");
+        })
+        .catch((error) =>
+          setStatus(
+            error instanceof Error ? error.message : "Không thể tự lưu cài đặt.",
+          ),
+        );
+    }, 700);
+
+    return () => {
+      if (autoSaveTimerRef.current) {
+        window.clearTimeout(autoSaveTimerRef.current);
+      }
+    };
+  }, [settings, settingsLoaded]);
 
   useEffect(() => {
     const updater = window.electron?.updater ?? window.doni.updater;
@@ -196,6 +253,50 @@ export function SettingsPanel(): JSX.Element {
   const refreshCodexStatus = async (): Promise<void> => {
     if (typeof window.doni.getCodexCliStatus !== "function") return;
     setCodexStatus(await window.doni.getCodexCliStatus());
+  };
+
+  const importAntiProviders = async (): Promise<void> => {
+    if (typeof window.doni.importAntiProviders !== "function") {
+      setAntiStatus("Electron preload API đã cũ. Hãy khởi động lại app.");
+      return;
+    }
+    setAntiStatus(null);
+    try {
+      const accounts = await window.doni.importAntiProviders();
+      setAntiAccounts(accounts);
+      setSelectedAntiProviderId((current) =>
+        current && accounts.some((account) => account.id === current) ? current : null,
+      );
+      setAntiStatus(
+        accounts.length
+          ? `Đã đọc ${accounts.length} account từ provide.`
+          : "Không có account hợp lệ trong provide.",
+      );
+    } catch (error) {
+      setAntiStatus(
+        error instanceof Error ? error.message : "Không thể import file JSON.",
+      );
+    }
+  };
+
+  const applyAntiAccount = async (account: AntiProviderAccount): Promise<void> => {
+    if (typeof window.doni.applyAntiProvider !== "function") {
+      setAntiStatus("Electron preload API đã cũ. Hãy khởi động lại app.");
+      return;
+    }
+    setAntiBusyId(account.id);
+    setAntiStatus(null);
+    try {
+      await window.doni.applyAntiProvider(account);
+      setSelectedAntiProviderId(account.id);
+      setAntiStatus(`Đã đổi provider thành ${account?.account}`);
+    } catch (error) {
+      setAntiStatus(
+        error instanceof Error ? error.message : "Không thể lưu.",
+      );
+    } finally {
+      setAntiBusyId(null);
+    }
   };
 
   const runUpdaterAction = async (
@@ -449,6 +550,68 @@ export function SettingsPanel(): JSX.Element {
       {status ? (
         <div className="mt-3 text-sm text-skyglass">{status}</div>
       ) : null}
+
+      <div className="mt-6 rounded-3xl border border-white/10 bg-ink/40 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h4 className="font-display text-lg font-semibold text-white">
+              Anti Provider
+            </h4>
+            <p className="mt-1 text-sm text-slate-500">
+              Import JSON, đọc danh sách provider
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void importAntiProviders()}
+            className="rounded-full border border-skyglass/30 px-3 py-2 text-xs font-bold text-skyglass hover:bg-skyglass/10"
+          >
+            Import JSON
+          </button>
+        </div>
+        {antiStatus ? (
+          <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-slate-300">
+            {antiStatus}
+          </div>
+        ) : null}
+        <div className="mt-4 grid gap-2">
+          {antiAccounts.map((account) => (
+            <div
+              key={account.id}
+              className={`flex flex-wrap items-center justify-between gap-3 rounded-2xl border p-3 ${
+                selectedAntiProviderId === account.id
+                  ? "border-mint/40 bg-mint/10"
+                  : "border-white/10 bg-white/[0.03]"
+              }`}
+            >
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="truncate text-sm font-semibold text-white">
+                    {account.account}
+                  </span>
+                  {selectedAntiProviderId === account.id ? (
+                    <span className="rounded-full border border-mint/30 bg-mint/10 px-2 py-0.5 text-[11px] font-bold text-mint">
+                      Đang dùng
+                    </span>
+                  ) : null}
+                </div>
+                <div className="mt-1 flex flex-wrap gap-3 font-mono text-xs text-slate-500">
+                  <span>access: ...</span>
+                  <span>...</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => void applyAntiAccount(account)}
+                disabled={antiBusyId === account.id}
+                className="rounded-full border border-mint/30 px-4 py-2 text-xs font-bold text-mint hover:bg-mint/10 disabled:opacity-50"
+              >
+                OK
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
 
       <div className="mt-6 rounded-3xl border border-white/10 bg-ink/40 p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">

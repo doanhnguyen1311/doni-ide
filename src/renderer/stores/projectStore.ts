@@ -91,6 +91,7 @@ interface ProjectState {
   setSelectedFolder: (folderPath: string | null) => void;
   setScannedFiles: (files: ProjectFile[]) => void;
   setProjectSummary: (summary: ProjectSummary | null) => void;
+  restoreLastProjectFolder: () => Promise<void>;
   refreshProjectScan: (folderPath?: string | null) => Promise<void>;
   previewProjectFile: (folderPath: string | null, relativePath: string) => Promise<void>;
   clearPreviewFile: () => void;
@@ -223,6 +224,25 @@ export const useProjectStore = create<ProjectState>((set) => ({
   setSelectedFolder: (folderPath) => set({ selectedFolder: folderPath }),
   setScannedFiles: (files) => set({ scannedFiles: files }),
   setProjectSummary: (summary) => set({ projectSummary: summary }),
+  restoreLastProjectFolder: async () => {
+    const state = useProjectStore.getState();
+    if (state.selectedFolder || typeof window.doni.restoreLastProjectFolder !== 'function') return;
+    set({ isLoading: true, error: null });
+    try {
+      const result = await window.doni.restoreLastProjectFolder();
+      if (result.canceled || !result.folderPath || !result.scan) return;
+      set({
+        selectedFolder: result.folderPath,
+        scannedFiles: result.scan.files,
+        projectSummary: result.scan.summary,
+      });
+      await useProjectStore.getState().saveProjectMemory(result.folderPath, result.scan.files);
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : 'Không thể khôi phục thư mục dự án gần nhất.' });
+    } finally {
+      set({ isLoading: false });
+    }
+  },
   refreshProjectScan: async (folderPath) => {
     const targetFolder = folderPath ?? useProjectStore.getState().selectedFolder;
     if (!targetFolder) return;

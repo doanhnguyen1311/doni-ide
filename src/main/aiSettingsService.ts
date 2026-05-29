@@ -2,6 +2,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { AiSettings } from '../shared/types';
+import { ensureDoniHome, getDoniHomeFile } from './doniHome';
 
 const SETTINGS_FILE = 'ai-settings.json';
 const DEFAULT_MAX_CONTEXT_FILES = 10;
@@ -17,13 +18,20 @@ function normalizeCustomModels(settings: Partial<AiSettings>): string[] {
   return Array.from(new Set(modelCandidates.map((item) => item?.trim()).filter((item): item is string => Boolean(item))));
 }
 
-function getSettingsPath(): string {
+async function getSettingsPath(): Promise<string> {
+  return getDoniHomeFile('settings', SETTINGS_FILE);
+}
+
+function getLegacySettingsPath(): string {
   return path.join(app.getPath('userData'), SETTINGS_FILE);
 }
 
 export async function getAiSettings(): Promise<AiSettings> {
   try {
-    const raw = await fs.readFile(getSettingsPath(), 'utf8');
+    const raw = await fs.readFile(await getSettingsPath(), 'utf8').catch(async (error) => {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      return fs.readFile(getLegacySettingsPath(), 'utf8');
+    });
     const parsed = JSON.parse(raw) as Partial<AiSettings>;
     const model = parsed.model ?? '';
     return {
@@ -80,8 +88,8 @@ export async function saveAiSettings(settings: AiSettings): Promise<AiSettings> 
     codexSandbox: settings.codexSandbox === 'workspace-write' ? 'workspace-write' : 'read-only',
   };
 
-  await fs.mkdir(app.getPath('userData'), { recursive: true });
-  await fs.writeFile(getSettingsPath(), JSON.stringify(normalized, null, 2), 'utf8');
+  await ensureDoniHome();
+  await fs.writeFile(await getSettingsPath(), JSON.stringify(normalized, null, 2), 'utf8');
   return normalized;
 }
 

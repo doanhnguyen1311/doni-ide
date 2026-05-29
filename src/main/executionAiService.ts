@@ -63,6 +63,9 @@ Rules:
 - oldContent must exactly match the provided file content.
 - newContent must be the full updated file content, not partial snippets.
 - Only include files from provided context.
+- The response must start with { and end with }.
+- Do not wrap the JSON in markdown fences.
+- Do not include prose before or after the JSON.
 - If you cannot safely create a patch, return:
 {
   "summary": "Cannot safely generate patch",
@@ -111,6 +114,11 @@ function extractJson(content: string): string {
   const trimmed = content.trim();
   const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)```\s*$/i);
   if (fenced?.[1]) return fenced[1].trim();
+  const firstBrace = trimmed.indexOf('{');
+  const lastBrace = trimmed.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    return trimmed.slice(firstBrace, lastBrace + 1);
+  }
   return trimmed;
 }
 
@@ -214,9 +222,22 @@ export async function executePrompt(
         },
       ],
       90000,
-      callbacks.onStream ? { onContentDelta: callbacks.onStream } : undefined,
+      { stream: false },
     );
-    const parsedPlan = parsePatchPlan(result.content);
+    let parsedPlan: PatchPlan;
+    try {
+      parsedPlan = parsePatchPlan(result.content);
+    } catch (error) {
+      return {
+        content: result.content,
+        usage: result.usage,
+        createdAt: new Date().toISOString(),
+        patchWarnings: [
+          error instanceof Error ? error.message : 'AI did not return valid patch JSON.',
+          'AI response was kept as an answer. Try again, add more context files, or switch to Quick Ask if you only need guidance.',
+        ],
+      };
+    }
     const validation = validatePatchAgainstContext(parsedPlan, request.contextFiles);
 
     return {
@@ -228,8 +249,10 @@ export async function executePrompt(
     };
   }
 
+  const isQuickAsk = request.selectedVariant.id === 'direct-question';
+  const answerModel = isQuickAsk ? settings.plannerModel || settings.model : settings.executorModel || settings.model;
   const result = await createChatCompletionResult(
-    { ...settings, model: settings.executorModel || settings.model },
+    { ...settings, model: answerModel },
     [
       { role: 'system', content: ANSWER_SYSTEM_PROMPT },
       {
@@ -240,7 +263,7 @@ export async function executePrompt(
       },
     ],
     60000,
-    callbacks.onStream ? { onContentDelta: callbacks.onStream } : undefined,
+    callbacks.onStream ? { onContentDelta: callbacks.onStream, stream: !isQuickAsk } : undefined,
   );
 
   return {

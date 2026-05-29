@@ -29,6 +29,7 @@ export interface ChatCompletionResult {
 
 interface ChatCompletionOptions {
   onContentDelta?: (chunk: string) => void;
+  stream?: boolean;
 }
 
 const MAX_NETWORK_EVENTS = 100;
@@ -140,7 +141,7 @@ async function readStreamingCompletionBody(
       }
       usage = json.usage ?? usage;
     } catch {
-      throw new AiApiError('AI API trả về phản hồi stream không phải JSON.', status);
+      throw new AiApiError(`AI API trả về phản hồi stream không phải JSON: ${trimmed.slice(0, 120)}`, status);
     }
   };
 
@@ -150,10 +151,14 @@ async function readStreamingCompletionBody(
     for (const rawLine of lines) {
       const line = rawLine.trim();
       if (!line) continue;
+      if (/^(event|id|retry):/i.test(line) || line.startsWith(':')) continue;
       readPayload(line.startsWith('data:') ? line.slice(5) : line);
     }
     if (isFinal && buffer.trim()) {
-      readPayload(buffer.startsWith('data:') ? buffer.slice(5) : buffer);
+      const line = buffer.trim();
+      if (!/^(event|id|retry):/i.test(line) && !line.startsWith(':')) {
+        readPayload(line.startsWith('data:') ? line.slice(5) : line);
+      }
       buffer = '';
     }
   };
@@ -205,7 +210,8 @@ export async function createChatCompletionResult(
   activeControllers.add(controller);
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const url = `${settings.apiBase.replace(/\/$/, '')}/chat/completions`;
-  const body = JSON.stringify({ model: settings.model, messages, temperature: 0.4, stream: Boolean(options.onContentDelta) });
+  const shouldStream = options.stream ?? Boolean(options.onContentDelta);
+  const body = JSON.stringify({ model: settings.model, messages, temperature: 0.4, stream: shouldStream });
   const startedAtMs = Date.now();
   const baseEvent = {
     id: crypto.randomUUID(),
@@ -245,7 +251,7 @@ export async function createChatCompletionResult(
       throw new AiApiError(`AI API error: ${detail}`, response.status);
     }
 
-    if (options.onContentDelta) {
+    if (shouldStream && options.onContentDelta) {
       const result = await readStreamingCompletionBody(response, response.status, options.onContentDelta);
       const finishedAtMs = Date.now();
       rememberNetworkEvent({

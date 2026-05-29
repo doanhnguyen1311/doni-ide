@@ -13,16 +13,12 @@ import type {
   ProjectChangedFileSummary,
   ProjectFile,
   PromptVariant,
+  SessionChatMessage,
 } from "../../shared/types";
 
 type RequestStyle = "direct" | "planned";
 type WorkMode = "quick" | "edit" | "agent";
-type ChatMessage = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  kind?: "plan" | "answer" | "patch" | "error";
-};
+type ChatMessage = SessionChatMessage;
 
 type DroppedComposerFile = {
   relativePath: string;
@@ -269,6 +265,7 @@ export function PromptWorkspace(): JSX.Element {
     useState<AiNetworkEvent | null>(null);
   const executionStreamRef = useRef("");
   const activeExecutionMessageIdRef = useRef<string | null>(null);
+  const chatMessagesRef = useRef<ChatMessage[]>([]);
   const [stopping, setStopping] = useState(false);
   const {
     selectedFolder,
@@ -303,12 +300,14 @@ export function PromptWorkspace(): JSX.Element {
     rollbackLoading,
     rollbackError,
     rollbackResult,
+    activeProjectId,
     activeSessionId,
     sessions,
     error,
     setSelectedFolder,
     setScannedFiles,
     setProjectSummary,
+    restoreLastProjectFolder,
     refreshProjectScan,
     setRawRequest,
     setPromptOptimization,
@@ -344,6 +343,12 @@ export function PromptWorkspace(): JSX.Element {
   } = useProjectStore();
 
   useEffect(() => {
+    if (!selectedFolder) {
+      void restoreLastProjectFolder();
+    }
+  }, [restoreLastProjectFolder, selectedFolder]);
+
+  useEffect(() => {
     if (typeof window.doni.onAiNetworkEvent !== "function") return;
     return window.doni.onAiNetworkEvent((event) => setLastNetworkEvent(event));
   }, []);
@@ -372,6 +377,7 @@ export function PromptWorkspace(): JSX.Element {
 
   useEffect(() => {
     if (!activeSessionId) {
+      chatMessagesRef.current = [];
       setChatMessages([]);
       setSubmittedMessage("");
       setDraftRequest("");
@@ -384,22 +390,30 @@ export function PromptWorkspace(): JSX.Element {
     }
     const session = sessions.find((item) => item.id === activeSessionId);
     if (!session) return;
-    const restoredMessages: ChatMessage[] = [];
-    if (session.rawRequest.trim()) {
-      restoredMessages.push({
-        id: `${session.id}-user`,
-        role: "user",
-        content: session.rawRequest,
-      });
-    }
-    if (session.executionResult?.trim()) {
-      restoredMessages.push({
-        id: `${session.id}-assistant`,
-        role: "assistant",
-        kind: session.executionMode === "patch" ? "patch" : "answer",
-        content: session.executionResult,
-      });
-    }
+    const restoredMessages: ChatMessage[] = session.chatMessages?.length
+      ? session.chatMessages
+      : [
+          ...(session.rawRequest.trim()
+            ? [
+                {
+                  id: `${session.id}-user`,
+                  role: "user" as const,
+                  content: session.rawRequest,
+                },
+              ]
+            : []),
+          ...(session.executionResult?.trim()
+            ? [
+                {
+                  id: `${session.id}-assistant`,
+                  role: "assistant" as const,
+                  kind: session.executionMode === "patch" ? ("patch" as const) : ("answer" as const),
+                  content: session.executionResult,
+                },
+              ]
+            : []),
+        ];
+    chatMessagesRef.current = restoredMessages;
     setChatMessages(restoredMessages);
     setSubmittedMessage(session.rawRequest);
     setDraftRequest("");
@@ -413,27 +427,54 @@ export function PromptWorkspace(): JSX.Element {
   const createChatMessageId = (): string =>
     `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-  const appendChatMessage = (message: Omit<ChatMessage, "id">): string => {
+  const persistChatMessages = (
+    messages = chatMessagesRef.current,
+    extra: Parameters<typeof updateCurrentSession>[0] = {},
+  ): void => {
+    if (!activeProjectId) return;
+    void updateCurrentSession({ ...extra, chatMessages: messages });
+  };
+
+  const replaceChatMessages = (messages: ChatMessage[]): ChatMessage[] => {
+    chatMessagesRef.current = messages;
+    setChatMessages(messages);
+    return messages;
+  };
+
+  const appendChatMessage = (
+    message: Omit<ChatMessage, "id">,
+    persist = false,
+    extraSessionData: Parameters<typeof updateCurrentSession>[0] = {},
+  ): { id: string; messages: ChatMessage[] } => {
     const id = createChatMessageId();
-    setChatMessages((current) => [
-      ...current,
+    const messages = replaceChatMessages([
+      ...chatMessagesRef.current,
       {
         ...message,
         id,
       },
     ]);
-    return id;
+    if (persist) {
+      void updateCurrentSession({ ...extraSessionData, chatMessages: messages });
+    }
+    return { id, messages };
   };
 
   const updateChatMessage = (
     id: string,
     update: Partial<Omit<ChatMessage, "id">>,
-  ): void => {
-    setChatMessages((current) =>
-      current.map((message) =>
+    persist = false,
+    extraSessionData: Parameters<typeof updateCurrentSession>[0] = {},
+  ): ChatMessage[] => {
+    const messages = replaceChatMessages(
+      chatMessagesRef.current.map((message) =>
         message.id === id ? { ...message, ...update } : message,
       ),
     );
+    if (persist) {
+      void updateCurrentSession({ ...extraSessionData, chatMessages: messages });
+    }
+    return messages;
   };
 
   const appendExecutionStreamMessage = (chunk: string): void => {
@@ -443,10 +484,10 @@ export function PromptWorkspace(): JSX.Element {
         role: "assistant",
         kind: "answer",
         content: "",
-      });
+      }).id;
     activeExecutionMessageIdRef.current = messageId;
-    setChatMessages((current) =>
-      current.map((message) =>
+    replaceChatMessages(
+      chatMessagesRef.current.map((message) =>
         message.id === messageId
           ? { ...message, content: `${message.content}${chunk}` }
           : message,
@@ -457,18 +498,18 @@ export function PromptWorkspace(): JSX.Element {
   const finishExecutionChatMessage = (
     content: string,
     kind: ChatMessage["kind"] = "answer",
-  ): void => {
+  ): ChatMessage[] => {
     const messageId = activeExecutionMessageIdRef.current;
     if (messageId) {
-      updateChatMessage(messageId, { role: "assistant", kind, content });
+      const messages = updateChatMessage(messageId, { role: "assistant", kind, content });
       activeExecutionMessageIdRef.current = null;
-      return;
+      return messages;
     }
-    appendChatMessage({
+    return appendChatMessage({
       role: "assistant",
       kind,
       content,
-    });
+    }).messages;
   };
 
   const clearExecutionStream = (): void => {
@@ -559,6 +600,7 @@ export function PromptWorkspace(): JSX.Element {
         taskBreakdown: result.taskBreakdown,
         implementationSuggestions: result.implementationSuggestions,
         promptVariants: result.variants,
+        chatMessages: chatMessagesRef.current,
       });
     } catch (caughtError) {
       const message =
@@ -720,7 +762,7 @@ export function PromptWorkspace(): JSX.Element {
 
     try {
       const settings = await window.doni.getSettings();
-      if (settings.executorProvider === "codex") {
+      if (settings.executorProvider === "codex" && workMode !== "quick") {
         const canWrite = settings.codexSandbox === "workspace-write";
         if (executionMode === "patch") {
           if (!canWrite) {
@@ -756,7 +798,7 @@ export function PromptWorkspace(): JSX.Element {
             changeSummary.files,
           );
           const savedExecutionResult = response.content.trim();
-          finishExecutionChatMessage(
+          const nextMessages = finishExecutionChatMessage(
             changeSummaryText
               ? `${savedExecutionResult}\n\n${changeSummaryText}`
               : savedExecutionResult,
@@ -770,6 +812,7 @@ export function PromptWorkspace(): JSX.Element {
             executionResult: changeSummaryText
               ? `${savedExecutionResult}\n\n${changeSummaryText}`
               : savedExecutionResult,
+            chatMessages: nextMessages,
           });
           return;
         }
@@ -795,7 +838,7 @@ export function PromptWorkspace(): JSX.Element {
           createdAt: response.finishedAt,
         });
         const savedExecutionResult = response.content.trim();
-        finishExecutionChatMessage(savedExecutionResult);
+        const nextMessages = finishExecutionChatMessage(savedExecutionResult);
         await updateCurrentSession({
           rawRequest: trimmedRequest,
           detectedIntent: effectiveIntent,
@@ -803,16 +846,22 @@ export function PromptWorkspace(): JSX.Element {
           finalPrompt: effectiveVariant.prompt,
           executionMode: "answer",
           executionResult: savedExecutionResult,
+          chatMessages: nextMessages,
         });
         return;
       }
       if (
         !settings.apiBase.trim() ||
         !settings.apiKey.trim() ||
-        !(settings.executorModel || settings.model).trim()
+        !(workMode === "quick"
+          ? settings.plannerModel || settings.model
+          : settings.executorModel || settings.model
+        ).trim()
       ) {
         throw new Error(
-          "Thiếu cài đặt executor. Hãy điền URL API Base, Khóa API và Model B executor.",
+          workMode === "quick"
+            ? "Thiếu cài đặt planner. Hãy điền URL API Base, Khóa API và Model A lập kế hoạch."
+            : "Thiếu cài đặt executor. Hãy điền URL API Base, Khóa API và Model B executor.",
         );
       }
       const contextFiles =
@@ -847,7 +896,7 @@ export function PromptWorkspace(): JSX.Element {
         setChangedFilesSummary(lineSummary);
       }
       const lineSummaryText = formatChangedFilesSummary(lineSummary);
-      finishExecutionChatMessage(
+      const nextMessages = finishExecutionChatMessage(
         executionMode === "patch"
           ? `Mình đã tạo bản chỉnh sửa xem trước bên dưới.${lineSummaryText ? `\n\n${lineSummaryText}` : ""}`
           : result.content,
@@ -864,10 +913,15 @@ export function PromptWorkspace(): JSX.Element {
             ? `${result.content}\n\n${lineSummaryText}`
             : result.content,
         loadedContextFilePaths: contextFiles.map((file) => file.relativePath),
+        chatMessages: nextMessages,
       });
       if (executionMode === "patch") {
         if (!result.patchPlan) {
-          throw new Error("AI không trả về patch plan hợp lệ.");
+          setPatchError(
+            result.patchWarnings?.join("\n") ??
+              "AI không trả về patch plan hợp lệ. Nội dung phản hồi đã được giữ trong chat.",
+          );
+          return;
         }
         const diffs = Object.fromEntries(
           result.patchPlan.files.map((file) => [
@@ -908,7 +962,12 @@ export function PromptWorkspace(): JSX.Element {
       } else {
         setExecutionError(cleanMessage);
       }
-      finishExecutionChatMessage(cleanMessage, "error");
+      const nextMessages = finishExecutionChatMessage(cleanMessage, "error");
+      await updateCurrentSession({
+        rawRequest: trimmedRequest,
+        executionMode,
+        chatMessages: nextMessages,
+      });
     } finally {
       setExecutionLoading(false);
       setPatchLoading(false);
@@ -1118,10 +1177,15 @@ export function PromptWorkspace(): JSX.Element {
     setDraftRequest("");
     setDroppedComposerFiles([]);
     setLastNetworkEvent(null);
+    let nextMessages = chatMessagesRef.current;
     if (shouldAppendUserMessage) {
-      appendChatMessage({ role: "user", content: message });
+      nextMessages = appendChatMessage({ role: "user", content: message }).messages;
     }
-    if (requestStyle === "planned" && (freshDraft || !selectedVariant)) {
+    const willPlan = requestStyle === "planned" && (freshDraft || !selectedVariant);
+    if (!willPlan) {
+      persistChatMessages(nextMessages, { rawRequest: message });
+    }
+    if (willPlan) {
       await planTask(message);
       return;
     }

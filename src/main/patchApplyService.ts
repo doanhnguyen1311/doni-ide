@@ -2,6 +2,7 @@ import { app } from 'electron';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { getDoniHomePath } from './doniHome';
 import type {
   ApplyPatchResponse,
   PatchApplyFileResult,
@@ -28,7 +29,7 @@ function getBackupsRoot(): string {
   if (!app || typeof app.getPath !== 'function') {
     return path.join(os.tmpdir(), 'doni-patch-backups');
   }
-  return path.join(app.getPath('userData'), 'patch-backups');
+  return path.join(getDoniHomePath(), 'patch-backups');
 }
 
 function createBackupId(): string {

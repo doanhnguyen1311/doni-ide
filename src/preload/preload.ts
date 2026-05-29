@@ -3,6 +3,8 @@ import type {
   AiSettings,
   AiExecutionStreamEvent,
   AiNetworkEvent,
+  AntiProviderState,
+  AntiProviderAccount,
   AnalyzeCommandErrorRequest,
   ApplyPatchRequest,
   ApplyPatchResponse,
@@ -45,6 +47,8 @@ import type {
 const electronApi: ElectronApi = {
   openProjectFolder: (): Promise<FolderPickerResult> =>
     ipcRenderer.invoke("project:open-folder"),
+  restoreLastProjectFolder: (): Promise<FolderPickerResult> =>
+    ipcRenderer.invoke("project:restore-last-folder"),
   scanProjectFolder: (
     request: ProjectScanRequest,
   ): Promise<ScanProjectResult> =>
@@ -56,6 +60,12 @@ const electronApi: ElectronApi = {
   getSettings: (): Promise<AiSettings> => ipcRenderer.invoke("settings:get"),
   saveSettings: (settings: AiSettings): Promise<AiSettings> =>
     ipcRenderer.invoke("settings:save", settings),
+  listImportedAntiProviders: (): Promise<AntiProviderState> =>
+    ipcRenderer.invoke("anti:listImportedProviders"),
+  importAntiProviders: (): Promise<AntiProviderAccount[]> =>
+    ipcRenderer.invoke("anti:importProviders"),
+  applyAntiProvider: (account: AntiProviderAccount): Promise<void> =>
+    ipcRenderer.invoke("anti:applyProvider", account),
   testConnection: (
     settings: AiSettings,
   ): Promise<{ ok: boolean; error?: string }> =>

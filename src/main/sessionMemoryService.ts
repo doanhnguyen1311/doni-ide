@@ -5,19 +5,24 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { ProjectMemoryInfo, SessionItem } from '../shared/types';
+import { ensureDoniHome, getDoniHomeFile, getDoniHomePath } from './doniHome';
 
 const MAX_OUTPUT_PREVIEW_BYTES = 20 * 1024;
 const execFileAsync = promisify(execFile);
 
 const projectMemoryDirs = new Map<string, string>();
-const DONI_SUBDIRS = ['chats', 'tasks', 'prompts', 'patches', 'cache', 'embeddings', 'logs', 'sessions', 'workspace'];
+const DONI_SUBDIRS = ['sessions'];
+
+interface AppMemoryState {
+  lastProjectPath?: string;
+}
 
 function projectIdFromPath(projectPath: string): string {
   return crypto.createHash('sha256').update(path.resolve(projectPath)).digest('hex').slice(0, 16);
 }
 
 function projectDir(projectId: string): string {
-  return projectMemoryDirs.get(projectId) ?? path.join(app.getPath('userData'), 'sessions', projectId);
+  return projectMemoryDirs.get(projectId) ?? path.join(getDoniHomePath(), 'project-sessions', projectId);
 }
 
 function sessionsPath(projectId: string): string {
@@ -26,6 +31,31 @@ function sessionsPath(projectId: string): string {
 
 function projectPath(projectId: string): string {
   return path.join(projectDir(projectId), 'project.json');
+}
+
+async function appStatePath(): Promise<string> {
+  return getDoniHomeFile('app-state.json');
+}
+
+function legacyAppStatePath(): string {
+  return path.join(app.getPath('userData'), 'app-state.json');
+}
+
+async function readAppState(): Promise<AppMemoryState> {
+  try {
+    const raw = await fs.readFile(await appStatePath(), 'utf8').catch(async (error) => {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      return fs.readFile(legacyAppStatePath(), 'utf8');
+    });
+    return JSON.parse(raw) as AppMemoryState;
+  } catch {
+    return {};
+  }
+}
+
+async function writeAppState(state: AppMemoryState): Promise<void> {
+  await ensureDoniHome();
+  await fs.writeFile(await appStatePath(), JSON.stringify(state, null, 2), 'utf8');
 }
 
 async function ensureProjectDir(projectId: string): Promise<void> {
@@ -40,9 +70,6 @@ async function ensureDoniWorkspace(projectPath: string): Promise<string> {
     await execFileAsync('attrib', ['+h', doniPath]).catch(() => undefined);
   }
   await Promise.all(DONI_SUBDIRS.map((dir) => fs.mkdir(path.join(doniPath, dir), { recursive: true })));
-  await fs.writeFile(path.join(doniPath, 'database.sqlite'), '', { flag: 'a' });
-  await fs.writeFile(path.join(doniPath, 'settings.json'), JSON.stringify({ ignoredFolders: ['node_modules', '.git', 'dist', 'build'] }, null, 2), { flag: 'wx' }).catch(() => undefined);
-  await fs.writeFile(path.join(doniPath, 'models.json'), JSON.stringify({ plannerModel: '', executorModel: '' }, null, 2), { flag: 'wx' }).catch(() => undefined);
   return doniPath;
 }
 
@@ -122,9 +149,21 @@ export async function createOrUpdateProjectMemory(input: {
     fileCount: input.fileCount,
     extensionsSummary: input.extensionsSummary,
   };
+  await writeAppState({ ...(await readAppState()), lastProjectPath: resolvedPath });
   await fs.writeFile(projectPath(projectId), JSON.stringify(metadata, null, 2), 'utf8');
   await writeSessions(projectId, await readSessions(projectId));
   return metadata;
+}
+
+export async function getLastProjectPath(): Promise<string | null> {
+  const lastProjectPath = (await readAppState()).lastProjectPath;
+  if (!lastProjectPath) return null;
+  try {
+    const stat = await fs.stat(lastProjectPath);
+    return stat.isDirectory() ? lastProjectPath : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function createSession(projectId: string, initialData: Partial<SessionItem>): Promise<SessionItem> {

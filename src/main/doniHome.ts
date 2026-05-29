@@ -11,7 +11,7 @@ export function getDoniHomePath(): string {
 }
 
 export function getCodexHomePath(): string {
-  return path.join(os.homedir(), '.mani');
+  return path.join(os.homedir(), '.codex');
 }
 
 export async function ensureDoniHome(): Promise<string> {

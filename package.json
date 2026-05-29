@@ -1,6 +1,6 @@
 {
   "name": "doni",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Doni - AI Coding Companion desktop MVP",
   "main": "dist/main/main.js",
   "private": true,

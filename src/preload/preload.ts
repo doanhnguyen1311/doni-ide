@@ -8,18 +8,27 @@ import type {
   AnalyzeCommandErrorRequest,
   ApplyPatchRequest,
   ApplyPatchResponse,
+  CancelProviderAuthRequest,
   ElectronApi,
   ExecutePromptRequest,
   ExecutePromptResponse,
   FolderPickerResult,
+  GetProviderAuthMetadataRequest,
   OptimizePromptRequest,
   OptimizePromptResponse,
   OpenInEditorRequest,
+  PollProviderAuthRequest,
   ProjectChangeSummaryRequest,
   ProjectChangeSummaryResponse,
+  ProviderAuthFlowResponse,
+  ProviderAuthMetadataResponse,
+  ProviderAuthMethodMetadata,
+  ProviderDefinition,
   ProjectScanRequest,
   ReadProjectFilesRequest,
   ReadProjectFilesResponse,
+  RefreshProviderAccountRequest,
+  RefreshProviderAccountResponse,
   RollbackPatchRequest,
   RollbackPatchResponse,
   CommandErrorEvent,
@@ -28,18 +37,24 @@ import type {
   CodexCliStatus,
   ErrorAnalysisResult,
   CreateSessionRequest,
+  DeleteAiProviderAccountRequest,
+  DoniModelDiscoveryResult,
   ProjectMemoryInfo,
   ProjectSessionsRequest,
+  ListDoniModelsRequest,
   ProbeCodexCliRequest,
   SaveProjectMemoryRequest,
   SessionItem,
   SessionRequest,
+  StartProviderAuthRequest,
   UpdateSessionRequest,
   RunCommandRequest,
   RunCommandResponse,
   RunCodexCliRequest,
   RunCodexCliResponse,
   ScanProjectResult,
+  TestAiProviderAccountRequest,
+  UpsertAiProviderAccountRequest,
   UpdaterProgress,
   UpdaterStatus,
 } from "../shared/types";
@@ -66,6 +81,48 @@ const electronApi: ElectronApi = {
     ipcRenderer.invoke("anti:importProviders"),
   applyAntiProvider: (account: AntiProviderAccount): Promise<void> =>
     ipcRenderer.invoke("anti:applyProvider", account),
+  listAiProviders: (): Promise<ProviderDefinition[]> =>
+    ipcRenderer.invoke("ai:listProviders"),
+  listDoniModels: (
+    request?: ListDoniModelsRequest,
+  ): Promise<DoniModelDiscoveryResult> =>
+    ipcRenderer.invoke("ai:listDoniModels", request),
+  refreshDoniModels: (
+    request?: ListDoniModelsRequest,
+  ): Promise<DoniModelDiscoveryResult> =>
+    ipcRenderer.invoke("ai:refreshDoniModels", request),
+  listAiAuthMethods: (): Promise<ProviderAuthMethodMetadata[]> =>
+    ipcRenderer.invoke("ai:listAuthMethods"),
+  getProviderAuthMetadata: (
+    request: GetProviderAuthMetadataRequest,
+  ): Promise<ProviderAuthMetadataResponse> =>
+    ipcRenderer.invoke("ai:getProviderAuthMetadata", request),
+  startProviderAuth: (
+    request: StartProviderAuthRequest,
+  ): Promise<ProviderAuthFlowResponse> =>
+    ipcRenderer.invoke("ai:startProviderAuth", request),
+  pollProviderAuth: (
+    request: PollProviderAuthRequest,
+  ): Promise<ProviderAuthFlowResponse> =>
+    ipcRenderer.invoke("ai:pollProviderAuth", request),
+  cancelProviderAuth: (
+    request: CancelProviderAuthRequest,
+  ): Promise<ProviderAuthFlowResponse> =>
+    ipcRenderer.invoke("ai:cancelProviderAuth", request),
+  refreshProviderAccount: (
+    request: RefreshProviderAccountRequest,
+  ): Promise<RefreshProviderAccountResponse> =>
+    ipcRenderer.invoke("ai:refreshProviderAccount", request),
+  upsertAiProviderAccount: (
+    request: UpsertAiProviderAccountRequest,
+  ): Promise<AiSettings> => ipcRenderer.invoke("ai:upsertProviderAccount", request),
+  deleteAiProviderAccount: (
+    request: DeleteAiProviderAccountRequest,
+  ): Promise<AiSettings> => ipcRenderer.invoke("ai:deleteProviderAccount", request),
+  testAiProviderAccount: (
+    request: TestAiProviderAccountRequest,
+  ): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke("ai:testProviderAccount", request),
   testConnection: (
     settings: AiSettings,
   ): Promise<{ ok: boolean; error?: string }> =>

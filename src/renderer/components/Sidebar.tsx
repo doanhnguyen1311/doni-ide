@@ -148,9 +148,16 @@ export function Sidebar({
   const refreshProjectScan = useProjectStore(
     (state) => state.refreshProjectScan,
   );
-  const hasRemainingPercent = typeof codexStatus?.remainingPercent === "number";
-  const hasWeeklyRemainingPercent =
-    typeof codexStatus?.weeklyRemainingPercent === "number";
+  const remainingPercent =
+    typeof codexStatus?.remainingPercent === "number"
+      ? codexStatus.remainingPercent
+      : undefined;
+  const weeklyRemainingPercent =
+    typeof codexStatus?.weeklyRemainingPercent === "number"
+      ? codexStatus.weeklyRemainingPercent
+      : undefined;
+  const hasRemainingPercent = typeof remainingPercent === "number";
+  const hasWeeklyRemainingPercent = typeof weeklyRemainingPercent === "number";
   const tokenText =
     typeof codexStatus?.totalTokens === "number"
       ? codexStatus.totalTokens.toLocaleString()
@@ -335,7 +342,7 @@ export function Sidebar({
               <span>Giới hạn 5 giờ</span>
               <span>
                 {hasRemainingPercent
-                  ? `${codexStatus.remainingPercent.toFixed(0)}% còn lại`
+                  ? `${remainingPercent.toFixed(0)}% còn lại`
                   : "Chưa rõ"}
               </span>
             </div>
@@ -343,7 +350,7 @@ export function Sidebar({
               <div
                 className={`h-full rounded-full ${hasRemainingPercent ? "bg-mint" : "bg-slate-700"}`}
                 style={{
-                  width: `${hasRemainingPercent ? codexStatus.remainingPercent : 100}%`,
+                  width: `${hasRemainingPercent ? remainingPercent : 100}%`,
                 }}
               />
             </div>
@@ -351,8 +358,7 @@ export function Sidebar({
               <div className="mt-1 flex items-center justify-between text-xs text-slate-600">
                 <span>Giới hạn tuần</span>
                 <span>
-                  {codexStatus?.weeklyRemainingPercent.toFixed(0) ?? null}% còn
-                  lại
+                  {weeklyRemainingPercent?.toFixed(0)}% còn lại
                 </span>
               </div>
             ) : null}

@@ -1,12 +1,14 @@
-﻿import { useEffect, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { useProjectStore } from "../stores/projectStore";
 import { PromptVariantCard } from "../components/PromptVariantCard";
 import { PatchPreview } from "../components/PatchPreview";
 import { createUnifiedDiff } from "../services/diff";
 import type {
+  AiSettings,
   AiNetworkEvent,
   DetectedIntent,
+  DoniModel,
   ProjectContext,
   ProjectContextFile,
   ProjectContextSummary,
@@ -15,6 +17,16 @@ import type {
   PromptVariant,
   SessionChatMessage,
 } from "../../shared/types";
+import {
+  getCatalogModel,
+  getVisibleModelIds,
+  type CatalogModelDefinition,
+} from "../../shared/modelCatalog";
+import {
+  createModelSelectionKey,
+  legacyModelSelectionKey,
+  modelSelectionKey,
+} from "../../shared/modelSelection";
 
 type RequestStyle = "direct" | "planned";
 type WorkMode = "quick" | "edit" | "agent";
@@ -34,6 +46,57 @@ type ProcessingStage =
   | "loading-context"
   | "editing"
   | "summarizing";
+
+type ComposerModelOption = CatalogModelDefinition & {
+  accountId?: string;
+  accountName?: string;
+  kind?: "model" | "codexCli";
+};
+type ComposerModelRole = "planner" | "executor";
+
+const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
+  openai: "OpenAI",
+  gemini: "Gemini",
+  anthropic: "Anthropic",
+  openrouter: "OpenRouter",
+  "openai-compatible": "OpenAI Compatible",
+  "openai-compatible-local": "OpenAI Compatible Local",
+  "custom-endpoint": "Custom Endpoint",
+  "user-defined": "User Defined",
+  ollama: "Ollama",
+  "lm-studio": "LM Studio",
+  "openai-codex": "OpenAI Codex",
+  "claude-code": "Claude Code",
+  "github-copilot": "GitHub Copilot",
+  "gemini-cli": "Gemini CLI",
+  "kiro-ai": "Kiro AI",
+  "nvidia-nim": "NVIDIA NIM",
+  "azure-openai": "Azure OpenAI",
+  cerebras: "Cerebras",
+  "codex-cli": "Codex CLI",
+};
+
+const PROVIDER_ICONS: Record<string, string> = {
+  openai: "AI",
+  gemini: "G",
+  anthropic: "C",
+  openrouter: "OR",
+  "openai-compatible": "AI",
+  "openai-compatible-local": "AI",
+  "custom-endpoint": "{}",
+  "user-defined": "{}",
+  ollama: "OL",
+  "lm-studio": "LM",
+  "openai-codex": "CX",
+  "claude-code": "CC",
+  "github-copilot": "GH",
+  "gemini-cli": "G",
+  "kiro-ai": "KI",
+  "nvidia-nim": "NV",
+  "azure-openai": "AZ",
+  cerebras: "CB",
+  "codex-cli": "CX",
+};
 
 const WORK_MODES: Array<{
   id: WorkMode;
@@ -66,6 +129,51 @@ const EDIT_CONTEXT_EXTENSIONS = new Set([
   ".yml",
   ".yaml",
 ]);
+
+const DEFAULT_ENDPOINT_PROVIDER_IDS = new Set([
+  "openai",
+  "openrouter",
+  "anthropic",
+  "gemini",
+  "ollama",
+  "lm-studio",
+  "nvidia-nim",
+  "cerebras",
+]);
+
+const LOCAL_NO_AUTH_PROVIDER_IDS = new Set([
+  "ollama",
+  "lm-studio",
+  "openai-compatible-local",
+]);
+
+function hasRunnableAiSettings(settings: AiSettings): boolean {
+  const hasLegacyCredential = Boolean(
+    settings.apiBase.trim() &&
+    (settings.apiKey.trim() || settings.secretReference?.trim()),
+  );
+  const hasProviderAccount = settings.accounts?.some((account) => {
+    const hasEndpoint =
+      Boolean(account.apiBase?.trim()) ||
+      DEFAULT_ENDPOINT_PROVIDER_IDS.has(account.providerId);
+    const hasCredential =
+      LOCAL_NO_AUTH_PROVIDER_IDS.has(account.providerId) ||
+      account.authState?.configured ||
+      Boolean(
+        account.credentialReferences?.apiKey ||
+        account.credentialReferences?.accessToken ||
+        account.secretReference,
+      );
+    return (
+      account.status !== "disabled" &&
+      account.status !== "invalid" &&
+      hasEndpoint &&
+      hasCredential
+    );
+  });
+
+  return hasLegacyCredential || Boolean(hasProviderAccount);
+}
 
 function buildProjectContext(
   selectedFolder: string,
@@ -244,6 +352,199 @@ function processingStageText(stage: ProcessingStage): string {
   return "Đang xử lý";
 }
 
+function modelOptionFromId(
+  providerId: string,
+  modelId: string,
+  accountId?: string,
+): ComposerModelOption {
+  const catalogModel = getCatalogModel(modelId, providerId);
+  if (catalogModel) return { ...catalogModel, accountId };
+  return {
+    id: modelId,
+    displayName: modelId,
+    providerId,
+    providerName: PROVIDER_DISPLAY_NAMES[providerId] ?? providerId,
+    providerIcon:
+      PROVIDER_ICONS[providerId] ?? providerId.slice(0, 2).toUpperCase(),
+    capabilities: ["chat"],
+    accountId,
+    description: accountId ? "Configured on this provider account." : undefined,
+  };
+}
+
+function modelOptionFromDoni(model: DoniModel): ComposerModelOption {
+  const capabilities: CatalogModelDefinition["capabilities"] = [];
+  if (model.capabilities.chat) capabilities.push("chat");
+  if (model.capabilities.streaming) capabilities.push("streaming");
+  if (model.capabilities.toolCalling || model.capabilities.functionCalling)
+    capabilities.push("tools");
+  if (model.capabilities.vision || model.capabilities.imageInput)
+    capabilities.push("vision");
+  if (model.capabilities.reasoning) capabilities.push("reasoning");
+  if (model.limits?.contextWindow && model.limits.contextWindow >= 128_000)
+    capabilities.push("longContext");
+  return {
+    id: model.rawId,
+    displayName: model.displayName || model.rawId,
+    providerId: model.provider,
+    providerName: PROVIDER_DISPLAY_NAMES[model.provider] ?? model.provider,
+    providerIcon:
+      PROVIDER_ICONS[model.provider] ??
+      model.provider.slice(0, 2).toUpperCase(),
+    capabilities: capabilities.length ? capabilities : ["chat"],
+    accountId: model.accountId,
+    accountName: model.accountName,
+    description:
+      model.description ||
+      (model.accountName
+        ? `${model.accountName} · ${model.availability.source}`
+        : model.availability.source),
+  };
+}
+
+function codexCliModelOption(): ComposerModelOption {
+  return {
+    id: "codex-cli",
+    displayName: "Codex CLI",
+    providerId: "codex-cli",
+    providerName: "Codex CLI",
+    providerIcon: "CX",
+    capabilities: ["chat", "tools", "local"],
+    kind: "codexCli",
+    description: "Run through the local Codex CLI with the configured sandbox.",
+  };
+}
+
+function modelOptionKey(model: ComposerModelOption): string {
+  return createModelSelectionKey(model.providerId, model.id, model.accountId);
+}
+
+function modelOptionLegacyKey(model: ComposerModelOption): string {
+  return legacyModelSelectionKey(model.providerId, model.id);
+}
+
+function modelOptionKeys(model: ComposerModelOption): string[] {
+  const keys = [modelOptionKey(model)];
+  const legacyKey = modelOptionLegacyKey(model);
+  if (legacyKey !== keys[0]) keys.push(legacyKey);
+  return keys;
+}
+
+function modelOptionMatchesKey(
+  model: ComposerModelOption,
+  key: string | undefined,
+): boolean {
+  return Boolean(key && modelOptionKeys(model).includes(key));
+}
+
+function buildComposerModelOptions(
+  settings: AiSettings | null,
+  discoveredModels: DoniModel[] = [],
+): ComposerModelOption[] {
+  if (!settings) return [];
+  const byKey = new Map<string, ComposerModelOption>();
+
+  const addModel = (model: ComposerModelOption): void => {
+    byKey.set(modelOptionKey(model), model);
+  };
+
+  addModel(codexCliModelOption());
+
+  const visibleProviderIds = Object.keys(settings.visibleModels ?? {});
+  const accountProviderIds = (settings.accounts ?? []).map(
+    (account) => account.providerId,
+  );
+  const providerIds = Array.from(
+    new Set(["gemini", ...visibleProviderIds, ...accountProviderIds]),
+  );
+
+  providerIds.forEach((providerId) => {
+    getVisibleModelIds(providerId, settings.visibleModels).forEach((modelId) =>
+      addModel(modelOptionFromId(providerId, modelId)),
+    );
+  });
+
+  discoveredModels
+    .filter((model) => model.availability.available)
+    .filter((model) => model.capabilities.chat || model.capabilities.code)
+    .forEach((model) => addModel(modelOptionFromDoni(model)));
+
+  const accountProviderSet = new Set(accountProviderIds);
+  (settings.modelLibrary ?? [])
+    .filter((model) => accountProviderSet.has(model.provider))
+    .filter((model) => model.capabilities.chat || model.capabilities.code)
+    .forEach((model) => addModel(modelOptionFromDoni(model)));
+
+  (settings.accounts ?? [])
+    .filter(
+      (account) =>
+        account.status !== "disabled" && account.status !== "invalid",
+    )
+    .forEach((account) => {
+      const visibleIds = getVisibleModelIds(
+        account.providerId,
+        settings.visibleModels,
+      );
+      const hasVisibilityConfig =
+        account.providerId === "gemini" ||
+        Boolean(settings.visibleModels?.[account.providerId]);
+      (account.modelIds ?? []).forEach((modelId) => {
+        if (hasVisibilityConfig && !visibleIds.includes(modelId)) return;
+        addModel(modelOptionFromId(account.providerId, modelId, account.id));
+      });
+    });
+
+  [
+    ...settings.customModels,
+    settings.model,
+    settings.plannerModel,
+    settings.executorModel,
+  ]
+    .map((modelId) => modelId.trim())
+    .filter(Boolean)
+    .forEach((modelId) =>
+      addModel(modelOptionFromId("custom-endpoint", modelId)),
+    );
+
+  return [...byKey.values()];
+}
+
+function groupModelOptions(
+  models: ComposerModelOption[],
+): Array<[string, ComposerModelOption[]]> {
+  const groups = new Map<string, ComposerModelOption[]>();
+  models.forEach((model) => {
+    const group = groups.get(model.providerId) ?? [];
+    group.push(model);
+    groups.set(model.providerId, group);
+  });
+  return [...groups.entries()].map(([providerId, providerModels]) => [
+    providerId,
+    providerModels.sort((left, right) =>
+      left.displayName.localeCompare(right.displayName),
+    ),
+  ]);
+}
+
+function selectedModelForMode(
+  settings: AiSettings | null,
+  role: ComposerModelRole,
+): string {
+  if (!settings) return "";
+  if (role === "executor" && settings.executorProvider === "codex") {
+    return "codex-cli";
+  }
+  if (role === "planner" && settings.plannerModelSelection?.modelId) {
+    return settings.plannerModelSelection.modelId;
+  }
+  if (role === "executor" && settings.executorModelSelection?.modelId) {
+    return settings.executorModelSelection.modelId;
+  }
+  if (role === "planner")
+    return settings.plannerModel || settings.model || settings.executorModel;
+  return settings.executorModel || settings.model || settings.plannerModel;
+}
+
 export function PromptWorkspace(): JSX.Element {
   const [requestStyle, setRequestStyle] = useState<RequestStyle>("direct");
   const [workMode, setWorkModeState] = useState<WorkMode>("quick");
@@ -261,8 +562,19 @@ export function PromptWorkspace(): JSX.Element {
   >([]);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalOutput, setTerminalOutput] = useState("");
+  const [terminalSessionActive, setTerminalSessionActive] = useState(false);
   const [lastNetworkEvent, setLastNetworkEvent] =
     useState<AiNetworkEvent | null>(null);
+  const [aiSettings, setAiSettings] = useState<AiSettings | null>(null);
+  const [discoveredModels, setDiscoveredModels] = useState<DoniModel[]>([]);
+  const [modelSelectorOpen, setModelSelectorOpen] = useState(false);
+  const [modelSelectorRole, setModelSelectorRole] =
+    useState<ComposerModelRole>("executor");
+  const [modelSearch, setModelSearch] = useState("");
+  const [focusedModelIndex, setFocusedModelIndex] = useState(0);
+  const [pendingModelKey, setPendingModelKey] = useState<string | null>(null);
+  const [modelStatus, setModelStatus] = useState<string | null>(null);
+  const modelSelectorRef = useRef<HTMLDivElement | null>(null);
   const executionStreamRef = useRef("");
   const activeExecutionMessageIdRef = useRef<string | null>(null);
   const chatMessagesRef = useRef<ChatMessage[]>([]);
@@ -354,6 +666,44 @@ export function PromptWorkspace(): JSX.Element {
   }, []);
 
   useEffect(() => {
+    if (typeof window.doni.getSettings !== "function") return;
+    void window.doni
+      .getSettings()
+      .then(setAiSettings)
+      .catch(() => undefined);
+    const onSettingsUpdated = (event: Event): void => {
+      const nextSettings = (event as CustomEvent<AiSettings>).detail;
+      if (nextSettings) setAiSettings(nextSettings);
+    };
+    window.addEventListener("doni-settings-updated", onSettingsUpdated);
+    return () =>
+      window.removeEventListener("doni-settings-updated", onSettingsUpdated);
+  }, []);
+
+  useEffect(() => {
+    if (!aiSettings || typeof window.doni.listDoniModels !== "function") return;
+    void window.doni
+      .listDoniModels()
+      .then((result) => setDiscoveredModels(result.models))
+      .catch(() => undefined);
+  }, [aiSettings?.accounts, aiSettings?.selectedAccountId]);
+
+  useEffect(() => {
+    if (!modelSelectorOpen) return;
+    const onPointerDown = (event: PointerEvent): void => {
+      if (
+        modelSelectorRef.current &&
+        event.target instanceof Node &&
+        !modelSelectorRef.current.contains(event.target)
+      ) {
+        setModelSelectorOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => window.removeEventListener("pointerdown", onPointerDown);
+  }, [modelSelectorOpen]);
+
+  useEffect(() => {
     if (typeof window.doni.onAiExecutionStream !== "function") return;
     return window.doni.onAiExecutionStream((event) => {
       if (event.source === "codex") {
@@ -384,6 +734,7 @@ export function PromptWorkspace(): JSX.Element {
       setChangedFilesSummary([]);
       setTerminalOpen(false);
       setTerminalOutput("");
+      setTerminalSessionActive(false);
       setProcessingStage("idle");
       clearExecutionStream();
       return;
@@ -407,7 +758,10 @@ export function PromptWorkspace(): JSX.Element {
                 {
                   id: `${session.id}-assistant`,
                   role: "assistant" as const,
-                  kind: session.executionMode === "patch" ? ("patch" as const) : ("answer" as const),
+                  kind:
+                    session.executionMode === "patch"
+                      ? ("patch" as const)
+                      : ("answer" as const),
                   content: session.executionResult,
                 },
               ]
@@ -455,7 +809,10 @@ export function PromptWorkspace(): JSX.Element {
       },
     ]);
     if (persist) {
-      void updateCurrentSession({ ...extraSessionData, chatMessages: messages });
+      void updateCurrentSession({
+        ...extraSessionData,
+        chatMessages: messages,
+      });
     }
     return { id, messages };
   };
@@ -472,7 +829,10 @@ export function PromptWorkspace(): JSX.Element {
       ),
     );
     if (persist) {
-      void updateCurrentSession({ ...extraSessionData, chatMessages: messages });
+      void updateCurrentSession({
+        ...extraSessionData,
+        chatMessages: messages,
+      });
     }
     return messages;
   };
@@ -501,7 +861,11 @@ export function PromptWorkspace(): JSX.Element {
   ): ChatMessage[] => {
     const messageId = activeExecutionMessageIdRef.current;
     if (messageId) {
-      const messages = updateChatMessage(messageId, { role: "assistant", kind, content });
+      const messages = updateChatMessage(messageId, {
+        role: "assistant",
+        kind,
+        content,
+      });
       activeExecutionMessageIdRef.current = null;
       return messages;
     }
@@ -571,8 +935,7 @@ export function PromptWorkspace(): JSX.Element {
     try {
       const settings = await window.doni.getSettings();
       if (
-        !settings.apiBase.trim() ||
-        !settings.apiKey.trim() ||
+        !hasRunnableAiSettings(settings) ||
         !(settings.plannerModel || settings.model).trim()
       ) {
         throw new Error(
@@ -754,6 +1117,7 @@ export function PromptWorkspace(): JSX.Element {
     setChangedFilesSummary([]);
     setTerminalOutput("");
     setTerminalOpen(false);
+    setTerminalSessionActive(false);
     setExecutionStartedAt(startedAt);
     setExecutionFinishedAt(null);
     setProcessingStage(
@@ -770,6 +1134,7 @@ export function PromptWorkspace(): JSX.Element {
               "Edit No Plan đang dùng Codex nhưng sandbox đang là read-only, nên Codex không được phép sửa file. Hãy chuyển Codex sandbox sang workspace-write trong Settings, hoặc đổi Executor Provider sang Custom để tạo patch preview rồi bấm Apply.",
             );
           }
+          setTerminalSessionActive(true);
           setProcessingStage("editing");
           const response = await window.doni.runCodexCli({
             folderPath: selectedFolder,
@@ -816,6 +1181,7 @@ export function PromptWorkspace(): JSX.Element {
           });
           return;
         }
+        setTerminalSessionActive(true);
         const response = await window.doni.runCodexCli({
           folderPath: selectedFolder,
           sandbox: settings.codexSandbox,
@@ -851,11 +1217,11 @@ export function PromptWorkspace(): JSX.Element {
         return;
       }
       if (
-        !settings.apiBase.trim() ||
-        !settings.apiKey.trim() ||
-        !(workMode === "quick"
-          ? settings.plannerModel || settings.model
-          : settings.executorModel || settings.model
+        !hasRunnableAiSettings(settings) ||
+        !(
+          workMode === "quick"
+            ? settings.plannerModel || settings.model
+            : settings.executorModel || settings.model
         ).trim()
       ) {
         throw new Error(
@@ -998,6 +1364,7 @@ export function PromptWorkspace(): JSX.Element {
     setExecutionFinishedAt(null);
     setTerminalOutput("");
     setTerminalOpen(false);
+    setTerminalSessionActive(true);
     setProcessingStage("editing");
     setChangedFilesSummary([]);
     try {
@@ -1179,9 +1546,13 @@ export function PromptWorkspace(): JSX.Element {
     setLastNetworkEvent(null);
     let nextMessages = chatMessagesRef.current;
     if (shouldAppendUserMessage) {
-      nextMessages = appendChatMessage({ role: "user", content: message }).messages;
+      nextMessages = appendChatMessage({
+        role: "user",
+        content: message,
+      }).messages;
     }
-    const willPlan = requestStyle === "planned" && (freshDraft || !selectedVariant);
+    const willPlan =
+      requestStyle === "planned" && (freshDraft || !selectedVariant);
     if (!willPlan) {
       persistChatMessages(nextMessages, { rawRequest: message });
     }
@@ -1313,6 +1684,227 @@ export function PromptWorkspace(): JSX.Element {
   const activeSessionTitle =
     sessions.find((session) => session.id === activeSessionId)?.title ??
     "Chat mới";
+  const allComposerModels = useMemo(
+    () => buildComposerModelOptions(aiSettings, discoveredModels),
+    [aiSettings, discoveredModels],
+  );
+  const visibleModelRole: ComposerModelRole =
+    workMode === "quick" ? "planner" : "executor";
+  const activeModelRole =
+    workMode === "agent" ? modelSelectorRole : visibleModelRole;
+  const plannerComposerModels = useMemo(() => {
+    const allModels = buildComposerModelOptions(aiSettings, discoveredModels);
+    if (!aiSettings) return allModels;
+    const defaultPlannerKeys = getVisibleModelIds(
+      "gemini",
+      aiSettings.visibleModels,
+    ).map((modelId) => `gemini:${modelId}`);
+    const allowedKeys = aiSettings.plannerModelIds?.length
+      ? aiSettings.plannerModelIds
+      : defaultPlannerKeys;
+    const allowedKeySet = new Set(allowedKeys);
+    const discoveredKeySet = new Set(
+      discoveredModels.flatMap((model) => [
+        createModelSelectionKey(model.provider, model.rawId, model.accountId),
+        legacyModelSelectionKey(model.provider, model.rawId),
+      ]),
+    );
+    const libraryKeySet = new Set(
+      (aiSettings.modelLibrary ?? []).flatMap((model) => [
+        createModelSelectionKey(model.provider, model.rawId, model.accountId),
+        legacyModelSelectionKey(model.provider, model.rawId),
+      ]),
+    );
+    return allModels.filter(
+      (model) =>
+        model.kind !== "codexCli" &&
+        (modelOptionKeys(model).some((key) => allowedKeySet.has(key)) ||
+          modelOptionKeys(model).some((key) => discoveredKeySet.has(key)) ||
+          modelOptionKeys(model).some((key) => libraryKeySet.has(key))),
+    );
+  }, [aiSettings, discoveredModels]);
+  const executorComposerModels = useMemo(() => {
+    if (!aiSettings) return allComposerModels;
+    const defaultPlannerKeys = getVisibleModelIds(
+      "gemini",
+      aiSettings.visibleModels,
+    ).map((modelId) => `gemini:${modelId}`);
+    const defaultExecutorKeys = [...defaultPlannerKeys, "codex-cli:codex-cli"];
+    const allowedKeys = aiSettings.executorModelIds?.length
+      ? aiSettings.executorModelIds
+      : defaultExecutorKeys;
+    const allowedKeySet = new Set(allowedKeys);
+    const discoveredKeySet = new Set(
+      discoveredModels.flatMap((model) => [
+        createModelSelectionKey(model.provider, model.rawId, model.accountId),
+        legacyModelSelectionKey(model.provider, model.rawId),
+      ]),
+    );
+    const libraryKeySet = new Set(
+      (aiSettings.modelLibrary ?? []).flatMap((model) => [
+        createModelSelectionKey(model.provider, model.rawId, model.accountId),
+        legacyModelSelectionKey(model.provider, model.rawId),
+      ]),
+    );
+    return allComposerModels.filter(
+      (model) =>
+        modelOptionKeys(model).some((key) => allowedKeySet.has(key)) ||
+        modelOptionKeys(model).some((key) => discoveredKeySet.has(key)) ||
+        modelOptionKeys(model).some((key) => libraryKeySet.has(key)),
+    );
+  }, [aiSettings, allComposerModels, discoveredModels]);
+  const composerModels =
+    activeModelRole === "planner"
+      ? plannerComposerModels
+      : executorComposerModels;
+  const selectedPlannerModelId = selectedModelForMode(aiSettings, "planner");
+  const selectedExecutorModelId = selectedModelForMode(aiSettings, "executor");
+  const selectedPlannerSelectionKey = aiSettings?.plannerModelSelection
+    ? modelSelectionKey(aiSettings.plannerModelSelection)
+    : undefined;
+  const selectedExecutorSelectionKey = aiSettings?.executorModelSelection
+    ? modelSelectionKey(aiSettings.executorModelSelection)
+    : undefined;
+  const selectedPlannerModel =
+    plannerComposerModels.find((model) =>
+      selectedPlannerSelectionKey
+        ? modelOptionMatchesKey(model, selectedPlannerSelectionKey)
+        : model.id === selectedPlannerModelId,
+    ) ??
+    (selectedPlannerModelId
+      ? (getCatalogModel(selectedPlannerModelId) ??
+        modelOptionFromId("custom-endpoint", selectedPlannerModelId))
+      : undefined);
+  const selectedExecutorModel =
+    executorComposerModels.find((model) =>
+      selectedExecutorSelectionKey
+        ? modelOptionMatchesKey(model, selectedExecutorSelectionKey)
+        : model.id === selectedExecutorModelId,
+    ) ??
+    (selectedExecutorModelId
+      ? selectedExecutorModelId === "codex-cli"
+        ? codexCliModelOption()
+        : (getCatalogModel(selectedExecutorModelId) ??
+          modelOptionFromId("custom-endpoint", selectedExecutorModelId))
+      : undefined);
+  const selectedComposerModel =
+    activeModelRole === "planner"
+      ? selectedPlannerModel
+      : selectedExecutorModel;
+  const primaryModelRole: ComposerModelRole =
+    workMode === "quick" ? "planner" : "executor";
+  const primaryDisplayModel =
+    primaryModelRole === "planner"
+      ? selectedPlannerModel
+      : selectedExecutorModel;
+  const selectedPlannerModelKey = selectedPlannerModel
+    ? modelOptionKey(selectedPlannerModel)
+    : undefined;
+  const primaryDisplayModelKey = primaryDisplayModel
+    ? modelOptionKey(primaryDisplayModel)
+    : undefined;
+  const selectedComposerModelKey = selectedComposerModel
+    ? modelOptionKey(selectedComposerModel)
+    : undefined;
+  const filteredComposerModels = composerModels.filter((model) => {
+    const query = modelSearch.trim().toLowerCase();
+    if (!query) return true;
+    return [model.displayName, model.id, model.providerName, model.description]
+      .filter((value): value is string => Boolean(value))
+      .some((value) => value.toLowerCase().includes(query));
+  });
+  const groupedComposerModels = groupModelOptions(filteredComposerModels);
+  const focusedComposerModel = filteredComposerModels[focusedModelIndex];
+  const pendingComposerModel =
+    composerModels.find((model) => modelOptionKey(model) === pendingModelKey) ??
+    focusedComposerModel ??
+    selectedComposerModel;
+
+  const selectComposerModel = async (
+    model: ComposerModelOption,
+    role: ComposerModelRole = activeModelRole,
+  ): Promise<void> => {
+    if (!aiSettings || typeof window.doni.saveSettings !== "function") return;
+    if (model.kind === "codexCli") {
+      if (role !== "executor") return;
+      const nextSettings: AiSettings = {
+        ...aiSettings,
+        executorProvider: "codex",
+        executorModelSelection: undefined,
+      };
+      if (workMode === "quick") {
+        setWorkMode("agent");
+      }
+      setAiSettings(nextSettings);
+      setModelSelectorOpen(false);
+      setModelSearch("");
+      setFocusedModelIndex(0);
+      setPendingModelKey(null);
+      const savedSettings = await window.doni.saveSettings(nextSettings);
+      setAiSettings(savedSettings);
+      window.dispatchEvent(
+        new CustomEvent("doni-settings-updated", { detail: savedSettings }),
+      );
+      setModelStatus("Main model set to Codex CLI.");
+      return;
+    }
+
+    const selectedAccountForProvider = aiSettings.accounts?.find(
+      (account) =>
+        account.id === aiSettings.selectedAccountId &&
+        account.providerId === model.providerId,
+    )?.id;
+    const matchingAccount =
+      model.accountId ??
+      selectedAccountForProvider ??
+      aiSettings.accounts?.find(
+        (account) => account.providerId === model.providerId,
+      )?.id;
+    const nextSelection = {
+      providerId: model.providerId,
+      ...(matchingAccount ? { accountId: matchingAccount } : {}),
+      modelId: model.id,
+    };
+    const nextSettings: AiSettings = {
+      ...aiSettings,
+      executorProvider:
+        role === "executor" ? "custom" : aiSettings.executorProvider,
+      selectedAccountId: matchingAccount,
+      model: model.id,
+      plannerModel:
+        role === "planner" ? model.id : aiSettings.plannerModel || model.id,
+      executorModel:
+        role === "executor" ? model.id : aiSettings.executorModel || model.id,
+      plannerModelSelection:
+        role === "planner"
+          ? nextSelection
+          : (aiSettings.plannerModelSelection ?? nextSelection),
+      executorModelSelection:
+        role === "executor"
+          ? nextSelection
+          : (aiSettings.executorModelSelection ?? nextSelection),
+      customModels: Array.from(new Set([...aiSettings.customModels, model.id])),
+    };
+    setAiSettings(nextSettings);
+    setModelSelectorOpen(false);
+    setModelSearch("");
+    setFocusedModelIndex(0);
+    setPendingModelKey(null);
+    const savedSettings = await window.doni.saveSettings(nextSettings);
+    setAiSettings(savedSettings);
+    window.dispatchEvent(
+      new CustomEvent("doni-settings-updated", { detail: savedSettings }),
+    );
+    setModelStatus(
+      `${role === "planner" ? "Planner" : "Main"} model set to ${model.displayName}.`,
+    );
+  };
+
+  useEffect(() => {
+    if (!modelStatus) return;
+    const timer = window.setTimeout(() => setModelStatus(null), 2200);
+    return () => window.clearTimeout(timer);
+  }, [modelStatus]);
 
   return (
     <main className="flex-1 overflow-hidden">
@@ -1514,7 +2106,7 @@ export function PromptWorkspace(): JSX.Element {
                 <div className="text-xs font-bold uppercase tracking-[0.18em] text-mint">
                   Changed files
                 </div>
-                <div className="mt-3 grid gap-2">
+                <div className="mt-3 flex flex-col gap-[12px]">
                   {changedFilesSummary.map((file) => (
                     <div
                       key={file.relativePath}
@@ -1553,7 +2145,7 @@ export function PromptWorkspace(): JSX.Element {
               </div>
             ) : null}
 
-            {executionLoading || terminalOutput ? (
+            {terminalSessionActive || terminalOutput ? (
               <div className="ml-11 max-w-4xl">
                 <button
                   type="button"
@@ -1594,6 +2186,11 @@ export function PromptWorkspace(): JSX.Element {
                 {error || executionError || patchError}
               </div>
             ) : null}
+            {modelStatus ? (
+              <div className="ml-11 w-fit rounded-full border border-mint/30 bg-mint/10 px-4 py-2 text-xs font-bold text-mint shadow-glow">
+                {modelStatus}
+              </div>
+            ) : null}
           </div>
         </div>
 
@@ -1619,7 +2216,7 @@ export function PromptWorkspace(): JSX.Element {
                 }
               }}
               onDrop={handleComposerDrop}
-              className={`relative overflow-hidden rounded-2xl border bg-ink/90 p-3 shadow-glow backdrop-blur transition focus-within:border-mint/40 ${
+              className={`relative rounded-2xl border bg-ink/90 p-3 shadow-glow backdrop-blur transition focus-within:border-mint/40 ${
                 composerDragActive
                   ? "border-skyglass/50 bg-skyglass/[0.06]"
                   : "border-white/10"
@@ -1643,6 +2240,319 @@ export function PromptWorkspace(): JSX.Element {
                       <div className="text-xs font-bold">{mode.label}</div>
                     </button>
                   ))}
+                  {workMode === "agent" ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setModelSelectorRole("planner");
+                        setModelSelectorOpen(true);
+                        setPendingModelKey(selectedPlannerModelKey ?? null);
+                        setModelSearch("");
+                        setFocusedModelIndex(0);
+                      }}
+                      onKeyDown={(event) => {
+                        if (
+                          event.key === "ArrowDown" ||
+                          event.key === "Enter" ||
+                          event.key === " "
+                        ) {
+                          event.preventDefault();
+                          setModelSelectorRole("planner");
+                          setModelSelectorOpen(true);
+                          setPendingModelKey(selectedPlannerModelKey ?? null);
+                          setModelSearch("");
+                          setFocusedModelIndex(0);
+                        }
+                      }}
+                      className={`ml-auto flex min-w-[13rem] items-center justify-between gap-3 rounded-xl border bg-white/[0.04] px-3 py-2 text-left shadow-glow transition hover:border-mint/40 focus:border-mint/50 focus:outline-none ${
+                        modelSelectorOpen && activeModelRole === "planner"
+                          ? "border-mint/40"
+                          : "border-white/10"
+                      }`}
+                    >
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-skyglass/30 bg-skyglass/10 font-display text-[11px] font-black text-skyglass">
+                          {selectedPlannerModel?.providerIcon ?? "AI"}
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">
+                            Planner
+                          </span>
+                          <span className="block truncate text-xs font-bold text-white">
+                            {selectedPlannerModel?.displayName ??
+                              "Select planner"}
+                          </span>
+                        </span>
+                      </span>
+                    </button>
+                  ) : null}
+                  <div
+                    ref={modelSelectorRef}
+                    className={`relative min-w-[15rem] ${workMode === "agent" ? "" : "ml-auto"}`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setModelSelectorRole(primaryModelRole);
+                        setModelSearch("");
+                        setModelSelectorOpen((value) => {
+                          const nextOpen = !value;
+                          if (nextOpen) {
+                            setPendingModelKey(primaryDisplayModelKey ?? null);
+                          }
+                          return nextOpen;
+                        });
+                        setFocusedModelIndex(0);
+                      }}
+                      onKeyDown={(event) => {
+                        if (
+                          event.key === "ArrowDown" ||
+                          event.key === "Enter" ||
+                          event.key === " "
+                        ) {
+                          event.preventDefault();
+                          setModelSelectorRole(primaryModelRole);
+                          setModelSelectorOpen(true);
+                          setPendingModelKey(primaryDisplayModelKey ?? null);
+                          setModelSearch("");
+                          setFocusedModelIndex(0);
+                        }
+                      }}
+                      className="flex w-full items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-left shadow-glow transition hover:border-mint/40 focus:border-mint/50 focus:outline-none"
+                    >
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-skyglass/30 bg-skyglass/10 font-display text-[11px] font-black text-skyglass">
+                          {primaryDisplayModel?.providerIcon ?? "AI"}
+                        </span>
+                        <span className="min-w-0">
+                          {workMode === "agent" ? (
+                            <span className="block text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">
+                              Main
+                            </span>
+                          ) : null}
+                          <span className="block truncate text-xs font-bold text-white">
+                            {primaryDisplayModel?.displayName ?? "Select model"}
+                          </span>
+                          <span className="block truncate text-[11px] text-slate-500">
+                            {primaryDisplayModel?.providerName ??
+                              "No model configured"}
+                          </span>
+                        </span>
+                      </span>
+                      <span className="text-xs font-black text-slate-500">
+                        {modelSelectorOpen ? "^" : "v"}
+                      </span>
+                    </button>
+                    <div
+                      className={`absolute bottom-full right-0 z-50 mb-2 w-[min(42rem,calc(100vw-3rem))] origin-bottom-right overflow-hidden rounded-2xl border border-white/10 bg-ink/95 shadow-2xl shadow-black/40 backdrop-blur transition duration-150 ${
+                        modelSelectorOpen
+                          ? "translate-y-0 scale-100 opacity-100"
+                          : "pointer-events-none translate-y-2 scale-95 opacity-0"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3 border-b border-white/10 p-3">
+                        <input
+                          value={modelSearch}
+                          onChange={(event) => {
+                            setModelSearch(event.target.value);
+                            setFocusedModelIndex(0);
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === "Escape") {
+                              setModelSelectorOpen(false);
+                              return;
+                            }
+                            if (event.key === "ArrowDown") {
+                              event.preventDefault();
+                              setFocusedModelIndex((index) =>
+                                Math.min(
+                                  index + 1,
+                                  Math.max(
+                                    0,
+                                    filteredComposerModels.length - 1,
+                                  ),
+                                ),
+                              );
+                              return;
+                            }
+                            if (event.key === "ArrowUp") {
+                              event.preventDefault();
+                              setFocusedModelIndex((index) =>
+                                Math.max(0, index - 1),
+                              );
+                              return;
+                            }
+                            if (event.key === "Enter" && focusedComposerModel) {
+                              event.preventDefault();
+                              if (
+                                pendingComposerModel &&
+                                modelOptionKey(pendingComposerModel) ===
+                                  modelOptionKey(focusedComposerModel)
+                              ) {
+                                void selectComposerModel(focusedComposerModel);
+                                return;
+                              }
+                              setPendingModelKey(
+                                modelOptionKey(focusedComposerModel),
+                              );
+                            }
+                          }}
+                          placeholder="Search models..."
+                          className="min-w-0 flex-1 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-mint/50"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setModelSelectorOpen(false)}
+                          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-white/10 text-sm font-black text-slate-500 transition hover:border-ember/40 hover:text-ember"
+                          aria-label="Close model selector"
+                        >
+                          x
+                        </button>
+                      </div>
+                      <div className="grid max-h-[27rem] grid-cols-1 overflow-hidden md:grid-cols-[1.1fr_0.9fr]">
+                        <div className="max-h-[27rem] overflow-y-auto p-2">
+                          {groupedComposerModels.length ? (
+                            groupedComposerModels.map(
+                              ([providerId, models]) => (
+                                <div key={providerId} className="py-1">
+                                  <div className="px-2 py-1 text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">
+                                    {PROVIDER_DISPLAY_NAMES[providerId] ??
+                                      models[0]?.providerName ??
+                                      providerId}
+                                  </div>
+                                  <div className="grid gap-1">
+                                    {models.map((model) => {
+                                      const flatIndex =
+                                        filteredComposerModels.findIndex(
+                                          (item) =>
+                                            item.providerId ===
+                                              model.providerId &&
+                                            item.id === model.id &&
+                                            item.accountId === model.accountId,
+                                        );
+                                      const key = modelOptionKey(model);
+                                      const isSelected =
+                                        selectedComposerModelKey === key;
+                                      const isPending = pendingModelKey === key;
+                                      const isFocused =
+                                        flatIndex === focusedModelIndex;
+                                      return (
+                                        <button
+                                          key={key}
+                                          type="button"
+                                          onMouseEnter={() =>
+                                            setFocusedModelIndex(flatIndex)
+                                          }
+                                          onClick={() =>
+                                            setPendingModelKey(key)
+                                          }
+                                          onDoubleClick={() =>
+                                            void selectComposerModel(model)
+                                          }
+                                          className={`flex items-start gap-3 rounded-xl border px-3 py-2 text-left transition ${
+                                            isPending
+                                              ? "border-mint/50 bg-mint/10"
+                                              : isSelected
+                                                ? "border-skyglass/30 bg-skyglass/10"
+                                                : isFocused
+                                                  ? "border-white/15 bg-white/[0.04]"
+                                                  : "border-transparent hover:border-white/10 hover:bg-white/[0.04]"
+                                          }`}
+                                        >
+                                          <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-skyglass/30 bg-skyglass/10 font-display text-[11px] font-black text-skyglass">
+                                            {model.providerIcon}
+                                          </span>
+                                          <span className="min-w-0 flex-1">
+                                            <span className="flex items-center gap-2">
+                                              <span className="truncate text-sm font-bold text-white">
+                                                {model.displayName}
+                                              </span>
+                                              {isSelected ? (
+                                                <span className="rounded-full border border-skyglass/30 px-2 py-0.5 text-[10px] font-bold text-skyglass">
+                                                  active
+                                                </span>
+                                              ) : null}
+                                            </span>
+                                            <span className="mt-0.5 block truncate font-mono text-[11px] text-slate-500">
+                                              {model.kind === "codexCli"
+                                                ? "local executor"
+                                                : model.accountName
+                                                  ? `${model.accountName} · ${model.id}`
+                                                  : model.id}
+                                            </span>
+                                          </span>
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              ),
+                            )
+                          ) : (
+                            <div className="px-3 py-8 text-center text-sm text-slate-500">
+                              No visible models match your search.
+                            </div>
+                          )}
+                        </div>
+                        <div className="border-t border-white/10 bg-white/[0.03] p-4 md:border-l md:border-t-0">
+                          {pendingComposerModel ? (
+                            <div className="flex h-full min-h-56 flex-col">
+                              <div className="flex items-center gap-3">
+                                <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-mint/30 bg-mint/10 font-display text-sm font-black text-mint">
+                                  {pendingComposerModel.providerIcon}
+                                </div>
+                                <div className="min-w-0">
+                                  <div className="text-base font-bold text-white">
+                                    {pendingComposerModel.displayName}
+                                  </div>
+                                  <div className="mt-1 text-xs font-semibold text-slate-500">
+                                    {pendingComposerModel.providerName}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="mt-4 rounded-xl border border-white/10 bg-ink/60 p-3">
+                                <div className="font-mono text-xs text-slate-500">
+                                  {pendingComposerModel.kind === "codexCli"
+                                    ? "executor: codex"
+                                    : pendingComposerModel.id}
+                                </div>
+                                {pendingComposerModel.description ? (
+                                  <div className="mt-2 text-sm leading-6 text-slate-300">
+                                    {pendingComposerModel.description}
+                                  </div>
+                                ) : null}
+                              </div>
+                              <div className="mt-3 flex flex-wrap gap-1">
+                                {pendingComposerModel.capabilities
+                                  .slice(0, 5)
+                                  .map((capability) => (
+                                    <span
+                                      key={capability}
+                                      className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[11px] font-semibold text-slate-400"
+                                    >
+                                      {capability}
+                                    </span>
+                                  ))}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void selectComposerModel(pendingComposerModel)
+                                }
+                                className="mt-auto rounded-xl bg-mint px-4 py-3 text-sm font-black text-ink transition hover:bg-mint/90"
+                              >
+                                Select
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="grid min-h-56 place-items-center text-center text-sm text-slate-500">
+                              Choose a model to preview it.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
                 {droppedComposerFiles.length ? (
                   <div className="mb-3 flex flex-wrap gap-2">

@@ -222,7 +222,7 @@ export async function executePrompt(
         },
       ],
       90000,
-      { stream: false },
+      { stream: false, taskType: 'code-edit' },
     );
     let parsedPlan: PatchPlan;
     try {
@@ -263,7 +263,9 @@ export async function executePrompt(
       },
     ],
     60000,
-    callbacks.onStream ? { onContentDelta: callbacks.onStream, stream: !isQuickAsk } : undefined,
+    callbacks.onStream
+      ? { onContentDelta: callbacks.onStream, stream: !isQuickAsk, taskType: isQuickAsk ? 'quick-chat' : 'code-edit' }
+      : { taskType: isQuickAsk ? 'quick-chat' : 'code-edit' },
   );
 
   return {

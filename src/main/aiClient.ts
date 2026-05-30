@@ -1,13 +1,9 @@
 ﻿import { BrowserWindow } from 'electron';
-import crypto from 'node:crypto';
-import type { AiSettings } from '../shared/types';
+import type { AiSettings, AiTaskType, ChatMessage } from '../shared/types';
 import { validateAiSettings } from './aiSettingsService';
 import type { AiNetworkEvent } from '../shared/types';
-
-interface ChatMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
-}
+import { createChatCompletionWithRouting } from './aiCore/aiCoreClient';
+import { AiProviderError } from './aiCore/errors';
 
 interface ChatCompletionResponse {
   choices?: Array<{ message?: { content?: string }; delta?: { content?: string } }>;
@@ -30,6 +26,7 @@ export interface ChatCompletionResult {
 interface ChatCompletionOptions {
   onContentDelta?: (chunk: string) => void;
   stream?: boolean;
+  taskType?: AiTaskType;
 }
 
 const MAX_NETWORK_EVENTS = 100;
@@ -202,95 +199,36 @@ export async function createChatCompletionResult(
   options: ChatCompletionOptions = {},
 ): Promise<ChatCompletionResult> {
   validateAiSettings(settings);
-  if (/[^\x20-\x7E]/.test(settings.apiKey)) {
+  if (settings.apiKey.trim() && /[^\x20-\x7E]/.test(settings.apiKey)) {
     throw new AiApiError('Khóa API chứa ký tự không được hỗ trợ. Hãy dùng khóa ASCII như "test" cho gateway cục bộ tương thích OpenAI.');
   }
 
   const controller = new AbortController();
   activeControllers.add(controller);
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  const url = `${settings.apiBase.replace(/\/$/, '')}/chat/completions`;
   const shouldStream = options.stream ?? Boolean(options.onContentDelta);
-  const body = JSON.stringify({ model: settings.model, messages, temperature: 0.4, stream: shouldStream });
-  const startedAtMs = Date.now();
-  const baseEvent = {
-    id: crypto.randomUUID(),
-    startedAt: new Date(startedAtMs).toISOString(),
-    method: 'POST' as const,
-    url,
-    model: settings.model,
-    requestBytes: Buffer.byteLength(body, 'utf8'),
-  };
 
   try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${settings.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body,
+    const result = await createChatCompletionWithRouting(settings, messages, {
+      model: settings.model,
+      taskType: options.taskType,
+      stream: shouldStream,
       signal: controller.signal,
+      onNetworkEvent: rememberNetworkEvent,
+      onStreamEvent: (event) => {
+        if (event.type === 'text_delta' && event.delta) {
+          options.onContentDelta?.(event.delta);
+        }
+      },
     });
-
-    if (!response.ok) {
-      const text = await response.text();
-      const finishedAtMs = Date.now();
-      rememberNetworkEvent({
-        ...baseEvent,
-        finishedAt: new Date(finishedAtMs).toISOString(),
-        status: response.status,
-        ok: response.ok,
-        durationMs: finishedAtMs - startedAtMs,
-        responseBytes: Buffer.byteLength(text, 'utf8'),
-      });
-      const detail = readHttpErrorDetail(text, response.headers.get('content-type'), response.statusText);
-      if (response.status === 401 || response.status === 403) {
-        throw new AiApiError('Khóa API không hợp lệ hoặc request AI API chưa được cấp quyền.', response.status);
-      }
-      throw new AiApiError(`AI API error: ${detail}`, response.status);
-    }
-
-    if (shouldStream && options.onContentDelta) {
-      const result = await readStreamingCompletionBody(response, response.status, options.onContentDelta);
-      const finishedAtMs = Date.now();
-      rememberNetworkEvent({
-        ...baseEvent,
-        finishedAt: new Date(finishedAtMs).toISOString(),
-        status: response.status,
-        ok: response.ok,
-        durationMs: finishedAtMs - startedAtMs,
-        responseBytes: result.responseBytes,
-      });
-      return { content: result.content, usage: result.usage };
-    }
-
-    const text = await response.text();
-    const finishedAtMs = Date.now();
-    rememberNetworkEvent({
-      ...baseEvent,
-      finishedAt: new Date(finishedAtMs).toISOString(),
-      status: response.status,
-      ok: response.ok,
-      durationMs: finishedAtMs - startedAtMs,
-      responseBytes: Buffer.byteLength(text, 'utf8'),
-    });
-
-    return parseChatCompletionBody(text, response.status);
+    return { content: result.content, usage: result.usage };
   } catch (error) {
-    if (!(error instanceof AiApiError)) {
-      const finishedAtMs = Date.now();
-      rememberNetworkEvent({
-        ...baseEvent,
-        finishedAt: new Date(finishedAtMs).toISOString(),
-        ok: false,
-        durationMs: finishedAtMs - startedAtMs,
-        error: error instanceof Error ? error.message : 'Lỗi mạng không xác định.',
-      });
-    }
     if (error instanceof AiApiError) throw error;
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new AiApiError('Request AI API đã bị dừng hoặc quá thời gian. Hãy thử lại nếu cần.');
+    if (error instanceof AiProviderError) {
+      throw new AiApiError(error.message, error.status);
+    }
+    if (error instanceof Error) {
+      throw new AiApiError(error.message);
     }
     throw new AiApiError('Không thể kết nối AI API. Hãy kiểm tra URL API Base và dịch vụ có đang chạy không.');
   } finally {

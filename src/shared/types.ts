@@ -376,14 +376,489 @@ export interface ExecutePromptResponse {
   patchWarnings?: string[];
 }
 
+export type ProviderCapability =
+  | "chat"
+  | "streaming"
+  | "tools"
+  | "vision"
+  | "reasoning"
+  | "webSearch"
+  | "imageGeneration"
+  | "audio"
+  | "longContext"
+  | "local";
+
+export type ProviderAuthType = "apiKey" | "oauth" | "none" | "custom";
+
+export type AiAuthMethodId =
+  | "apiKey"
+  | "oauthPkce"
+  | "deviceCode"
+  | "tokenImport"
+  | "cookieSession"
+  | "localNoAuth";
+
+export interface ProviderAuthMethodMetadata {
+  id: AiAuthMethodId;
+  displayName: string;
+  description?: string;
+  requiresSecret: boolean;
+  supportsRefresh: boolean;
+  status: "available" | "future" | "experimental";
+  requiresClientId?: boolean;
+  scopes?: string[];
+}
+
+export interface ProviderModelDefinition {
+  id: string;
+  displayName: string;
+  contextWindowTokens?: number;
+  capabilities: ProviderCapability[];
+}
+
+export type ProviderCategory =
+  | "oauth"
+  | "free-tier"
+  | "api-key"
+  | "local"
+  | "custom";
+
+export type ProviderModelDiscoveryStrategy =
+  | "openai-compatible"
+  | "openrouter"
+  | "gemini"
+  | "anthropic"
+  | "ollama"
+  | "lm-studio"
+  | "custom-openai-compatible"
+  | "manual";
+
+export interface ProviderModelDiscoveryDefinition {
+  strategy: ProviderModelDiscoveryStrategy;
+  endpoint?: string;
+  supportsRemote: boolean;
+  cacheable: boolean;
+}
+
+export interface DoniModelCapabilities {
+  chat: boolean;
+  code: boolean;
+  vision: boolean;
+  imageInput: boolean;
+  imageOutput: boolean;
+  toolCalling: boolean;
+  functionCalling: boolean;
+  streaming: boolean;
+  reasoning: boolean;
+  embedding: boolean;
+  rerank: boolean;
+}
+
+export interface DoniModel {
+  id: string;
+  provider: string;
+  accountId?: string;
+  accountName?: string;
+  displayName: string;
+  rawId: string;
+  family?: string;
+  description?: string;
+  capabilities: DoniModelCapabilities;
+  limits?: {
+    contextWindow?: number;
+    maxOutputTokens?: number;
+    inputTokenLimit?: number;
+    outputTokenLimit?: number;
+  };
+  pricing?: {
+    inputPerMillion?: number;
+    outputPerMillion?: number;
+    currency?: string;
+  };
+  availability: {
+    available: boolean;
+    reason?: string;
+    source: "remote" | "local" | "merged" | "fallback";
+  };
+  fetchedAt?: string;
+  raw?: unknown;
+}
+
+export interface ListDoniModelsRequest {
+  providerId?: string;
+  accountId?: string;
+  refresh?: boolean;
+  includeUnavailable?: boolean;
+}
+
+export interface DoniModelDiscoveryResult {
+  models: DoniModel[];
+  registry?: DoniModelRegistryProvider[];
+  refreshedAt?: string;
+  warnings?: string[];
+}
+
+export interface DoniModelRegistryAccount {
+  accountId: string;
+  accountName: string;
+  status: AiAccountStatus;
+  models: DoniModel[];
+  refreshedAt?: string;
+  warning?: string;
+}
+
+export interface DoniModelRegistryProvider {
+  providerId: string;
+  providerName: string;
+  accounts: DoniModelRegistryAccount[];
+}
+
+export type ProviderAccountConnectionState =
+  | "connected"
+  | "error"
+  | "disconnected";
+
+export interface ProviderAccountConnectionSummary {
+  accountId: string;
+  providerId: string;
+  displayName: string;
+  status: ProviderAccountConnectionState;
+  apiBase?: string;
+  errorCode?: string;
+  errorMessage?: string;
+  errorTime?: string;
+}
+
+export interface ProviderConnectionSummary {
+  providerId: string;
+  totalAccounts: number;
+  connectedAccounts: number;
+  errorAccounts: number;
+  disconnectedAccounts: number;
+  lastErrorCode?: string;
+  lastErrorTime?: string;
+  label: string;
+  readinessLabel: "No Connections" | "Ready" | "Degraded" | "Error";
+  accounts: ProviderAccountConnectionSummary[];
+}
+
+export interface ProviderDefinition {
+  id: string;
+  displayName: string;
+  icon: string;
+  category: ProviderCategory;
+  authType: ProviderAuthType;
+  authMethods?: ProviderAuthMethodMetadata[];
+  defaultApiBase?: string;
+  modelDiscovery: ProviderModelDiscoveryDefinition;
+  connectionSummary?: ProviderConnectionSummary;
+  capabilities: ProviderCapability[];
+  supportedModels: ProviderModelDefinition[];
+}
+
+export type AiAccountStatus = "active" | "disabled" | "cooldown" | "invalid";
+
+export interface AiAccountQuota {
+  remainingRequests?: number;
+  remainingTokens?: number;
+  resetsAt?: string;
+}
+
+export interface AiProviderAccount {
+  id: string;
+  providerId: string;
+  displayName: string;
+  authMethod?: AiAuthMethodId;
+  status: AiAccountStatus;
+  priority: number;
+  healthScore: number;
+  cooldownUntil?: string;
+  lastError?: string;
+  lastErrorCode?: string;
+  lastErrorTime?: string;
+  quota?: AiAccountQuota;
+  lastUsed?: string;
+  secretReference?: string;
+  credentialReferences?: {
+    apiKey?: string;
+    accessToken?: string;
+    refreshToken?: string;
+    oauthClientSecret?: string;
+    cookie?: string;
+    copilotToken?: string;
+  };
+  authState?: {
+    configured?: boolean;
+    expiresAt?: string;
+    refreshable?: boolean;
+    lastRefreshAt?: string;
+    clientId?: string;
+    scopes?: string[];
+  };
+  metadata?: Record<string, string | number | boolean | null | undefined>;
+  apiBase?: string;
+  modelIds?: string[];
+}
+
+export interface AiModelSelection {
+  providerId: string;
+  accountId?: string;
+  modelId: string;
+}
+
+export interface UpsertAiProviderAccountRequest {
+  accountId?: string;
+  providerId: string;
+  displayName: string;
+  apiBase?: string;
+  modelIds?: string[];
+  authMethod?: AiAuthMethodId;
+  status?: AiAccountStatus;
+  priority?: number;
+  healthScore?: number;
+  secretReference?: string;
+  apiKey?: string;
+  makeDefault?: boolean;
+}
+
+export interface DeleteAiProviderAccountRequest {
+  accountId: string;
+}
+
+export interface TestAiProviderAccountRequest {
+  accountId?: string;
+  providerId: string;
+  displayName: string;
+  apiBase?: string;
+  model: string;
+  authMethod?: AiAuthMethodId;
+  secretReference?: string;
+  apiKey?: string;
+}
+
+export interface GetProviderAuthMetadataRequest {
+  providerId: string;
+}
+
+export interface ProviderAuthMetadataResponse {
+  providerId: string;
+  known: boolean;
+  errorCode?: "unknown_provider";
+  message?: string;
+  authMethods: ProviderAuthMethodMetadata[];
+}
+
+export interface StartProviderAuthRequest {
+  providerId: string;
+  authMethod: AiAuthMethodId;
+  accountId?: string;
+  clientId?: string;
+  clientSecret?: string;
+  redirectUri?: string;
+  scopes?: string[];
+}
+
+export interface PollProviderAuthRequest {
+  sessionId: string;
+}
+
+export interface CancelProviderAuthRequest {
+  sessionId: string;
+}
+
+export interface RefreshProviderAccountRequest {
+  accountId: string;
+}
+
+export type ProviderAuthFlowStatus =
+  | "started"
+  | "pending"
+  | "completed"
+  | "cancelled"
+  | "denied"
+  | "slow_down"
+  | "expired"
+  | "not_implemented"
+  | "not_refreshable"
+  | "not_required"
+  | "error";
+
+export interface ProviderAuthFlowResponse {
+  ok: boolean;
+  status: ProviderAuthFlowStatus;
+  providerId?: string;
+  authMethod?: AiAuthMethodId;
+  sessionId?: string;
+  authorizationUrl?: string;
+  verificationUri?: string;
+  verificationUriComplete?: string;
+  userCode?: string;
+  expiresAt?: string;
+  intervalSeconds?: number;
+  accountId?: string;
+  accountDisplayName?: string;
+  message?: string;
+}
+
+export interface RefreshProviderAccountResponse {
+  ok: boolean;
+  status: ProviderAuthFlowStatus;
+  accountId: string;
+  providerId?: string;
+  expiresAt?: string;
+  message?: string;
+}
+
+export interface AiAccountHealthRecord {
+  accountId: string;
+  providerId: string;
+  healthScore: number;
+  failureCount: number;
+  cooldownUntil?: string;
+  lastFailureAt?: string;
+  lastSuccessAt?: string;
+  lastError?: string;
+  lastErrorCode?: string;
+  updatedAt: string;
+}
+
+export interface AiModelLockRecord {
+  accountId: string;
+  providerId: string;
+  model: string;
+  lockedUntil: string;
+  reason: string;
+  updatedAt: string;
+}
+
+export type AiTaskType =
+  | "chat"
+  | "quick-chat"
+  | "code-edit"
+  | "code-review"
+  | "refactor"
+  | "debug"
+  | "explain"
+  | "generate-test"
+  | "commit-message";
+
+export interface AiRoutingProfile {
+  taskType: AiTaskType;
+  providerId?: string;
+  accountId?: string;
+  model: string;
+  modelSelection?: AiModelSelection;
+  fallbackProviderIds?: string[];
+}
+
+export interface ChatMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+  name?: string;
+  toolCallId?: string;
+}
+
+export interface ContextBundle {
+  sources: Array<{
+    type:
+      | "currentFile"
+      | "selection"
+      | "openTab"
+      | "projectTree"
+      | "gitDiff"
+      | "recentChange"
+      | "diagnostic"
+      | "terminal"
+      | "searchResult"
+      | "workspaceMemory"
+      | "userMemory";
+    label: string;
+    content: string;
+    score?: number;
+    tokenEstimate?: number;
+  }>;
+  budget: {
+    maxTokens: number;
+    usedTokens: number;
+    allocations: Record<string, number>;
+  };
+}
+
+export interface ChatRequest {
+  taskType: AiTaskType;
+  messages: ChatMessage[];
+  model?: string;
+  providerId?: string;
+  accountId?: string;
+  contextBundle?: ContextBundle;
+  stream?: boolean;
+  temperature?: number;
+}
+
+export interface ChatResponse {
+  content: string;
+  usage?: unknown;
+  providerId: string;
+  accountId: string;
+  model: string;
+  createdAt: string;
+  warnings?: string[];
+}
+
+export type ChatStreamEventType =
+  | "start"
+  | "text_delta"
+  | "reasoning_delta"
+  | "tool_call_delta"
+  | "usage"
+  | "warning"
+  | "error"
+  | "done"
+  | "cancelled";
+
+export interface ChatStreamEvent {
+  type: ChatStreamEventType;
+  timestamp: string;
+  providerId?: string;
+  accountId?: string;
+  model?: string;
+  delta?: string;
+  usage?: unknown;
+  warning?: string;
+  error?: string;
+}
+
+export interface RouteDecision {
+  providerId: string;
+  accountId: string;
+  model: string;
+  reason: string;
+  fallbackChain: Array<{
+    providerId: string;
+    accountId: string;
+    model: string;
+  }>;
+}
+
 export interface AiSettings {
   apiBase: string;
   apiKey: string;
+  secretReference?: string;
   model: string;
   plannerModel: string;
   executorModel: string;
+  plannerModelSelection?: AiModelSelection;
+  executorModelSelection?: AiModelSelection;
+  plannerModelIds?: string[];
+  executorModelIds?: string[];
   customModels: string[];
   executorProvider: "custom" | "codex";
+  selectedAccountId?: string;
+  accounts?: AiProviderAccount[];
+  routingProfiles?: AiRoutingProfile[];
+  modelLibrary?: DoniModel[];
+  visibleModels?: Record<string, string[]>;
+  routingFallbackEnabled?: boolean;
   maxContextFiles: number;
   ignorePatterns: string[];
   autoBackup: boolean;
@@ -396,12 +871,15 @@ export interface AntiProviderAccount {
   account: string;
   accessToken: string;
   refreshToken: string;
+  accessTokenReference?: string;
+  refreshTokenReference?: string;
   chatgptAccountId?: string;
 }
 
 export interface AntiProviderState {
   accounts: AntiProviderAccount[];
   selectedProviderId?: string;
+  sourceFilePath?: string;
 }
 
 export interface AiNetworkEvent {
@@ -475,6 +953,38 @@ export interface ElectronApi {
   listImportedAntiProviders: () => Promise<AntiProviderState>;
   importAntiProviders: () => Promise<AntiProviderAccount[]>;
   applyAntiProvider: (account: AntiProviderAccount) => Promise<void>;
+  listAiProviders: () => Promise<ProviderDefinition[]>;
+  listDoniModels: (
+    request?: ListDoniModelsRequest,
+  ) => Promise<DoniModelDiscoveryResult>;
+  refreshDoniModels: (
+    request?: ListDoniModelsRequest,
+  ) => Promise<DoniModelDiscoveryResult>;
+  listAiAuthMethods: () => Promise<ProviderAuthMethodMetadata[]>;
+  getProviderAuthMetadata: (
+    request: GetProviderAuthMetadataRequest,
+  ) => Promise<ProviderAuthMetadataResponse>;
+  startProviderAuth: (
+    request: StartProviderAuthRequest,
+  ) => Promise<ProviderAuthFlowResponse>;
+  pollProviderAuth: (
+    request: PollProviderAuthRequest,
+  ) => Promise<ProviderAuthFlowResponse>;
+  cancelProviderAuth: (
+    request: CancelProviderAuthRequest,
+  ) => Promise<ProviderAuthFlowResponse>;
+  refreshProviderAccount: (
+    request: RefreshProviderAccountRequest,
+  ) => Promise<RefreshProviderAccountResponse>;
+  upsertAiProviderAccount: (
+    request: UpsertAiProviderAccountRequest,
+  ) => Promise<AiSettings>;
+  deleteAiProviderAccount: (
+    request: DeleteAiProviderAccountRequest,
+  ) => Promise<AiSettings>;
+  testAiProviderAccount: (
+    request: TestAiProviderAccountRequest,
+  ) => Promise<{ ok: boolean; error?: string }>;
   testConnection: (
     settings: AiSettings,
   ) => Promise<{ ok: boolean; error?: string }>;

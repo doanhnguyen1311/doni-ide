@@ -35,7 +35,7 @@ export function VerifyPanel({ selectedFolder }: { selectedFolder: string | null 
   const {
     commandInput,
     selectedCommandPreset,
-    commandChạyning,
+    commandRunning,
     commandStatus,
     commandOutput,
     commandExitCode,
@@ -52,7 +52,7 @@ export function VerifyPanel({ selectedFolder }: { selectedFolder: string | null 
     appendCommandOutput,
     clearCommandOutput,
     setCommandStatus,
-    setCommandChạyning,
+    setCommandRunning,
     setCommandError,
     setCommandFinishedAt,
     analyzeCommandError,
@@ -74,7 +74,7 @@ export function VerifyPanel({ selectedFolder }: { selectedFolder: string | null 
       const current = useProjectStore.getState();
       const finalStatus: CommandStatus = current.commandStatus === 'stopped' ? 'stopped' : event.exitCode === 0 ? 'success' : 'failed';
       const finishedAt = new Date().toISOString();
-      setCommandChạyning(false);
+      setCommandRunning(false);
       setCommandStatus(finalStatus, event.exitCode);
       setCommandFinishedAt(finishedAt);
       appendCommandOutput(
@@ -99,7 +99,7 @@ export function VerifyPanel({ selectedFolder }: { selectedFolder: string | null 
       removeError();
       removeExit();
     };
-  }, [appendCommandOutput, setCommandError, setCommandFinishedAt, setCommandChạyning, setCommandStatus, updateCurrentSession]);
+  }, [appendCommandOutput, setCommandError, setCommandFinishedAt, setCommandRunning, setCommandStatus, updateCurrentSession]);
 
   const copySuggestedPrompt = async (): Promise<void> => {
     if (!errorAnalysisResult?.suggestedPrompt) return;
@@ -142,13 +142,13 @@ export function VerifyPanel({ selectedFolder }: { selectedFolder: string | null 
       </div>
 
       <div className="mt-4 flex flex-wrap gap-3">
-        <button type="button" onClick={() => runCommand(selectedFolder)} disabled={!selectedFolder || commandChạyning} className="rounded-full bg-mint px-5 py-3 text-sm font-extrabold text-ink transition hover:bg-mint/90 disabled:cursor-not-allowed disabled:opacity-50">
+        <button type="button" onClick={() => runCommand(selectedFolder)} disabled={!selectedFolder || commandRunning} className="rounded-full bg-mint px-5 py-3 text-sm font-extrabold text-ink transition hover:bg-mint/90 disabled:cursor-not-allowed disabled:opacity-50">
           Chạy
         </button>
-        <button type="button" onClick={stopCommand} disabled={!commandChạyning} className="rounded-full border border-white/10 px-4 py-3 text-sm font-semibold text-white transition hover:border-ember/50 hover:text-ember disabled:cursor-not-allowed disabled:opacity-40">
+        <button type="button" onClick={stopCommand} disabled={!commandRunning} className="rounded-full border border-white/10 px-4 py-3 text-sm font-semibold text-white transition hover:border-ember/50 hover:text-ember disabled:cursor-not-allowed disabled:opacity-40">
           Dừng
         </button>
-        <button type="button" onClick={clearCommandOutput} disabled={commandChạyning || (!commandOutput && !commandError)} className="rounded-full border border-white/10 px-4 py-3 text-sm font-semibold text-white transition hover:border-white/30 disabled:cursor-not-allowed disabled:opacity-40">
+        <button type="button" onClick={clearCommandOutput} disabled={commandRunning || (!commandOutput && !commandError)} className="rounded-full border border-white/10 px-4 py-3 text-sm font-semibold text-white transition hover:border-white/30 disabled:cursor-not-allowed disabled:opacity-40">
           Xóa output
         </button>
       </div>
